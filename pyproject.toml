@@ -2,6 +2,9 @@
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+include = ["isoplots"]
+
 [project]
 name = "isoplots"
 version = "0.0.1"
@@ -33,7 +36,6 @@ dependencies = [
 ]
 
 [project.urls]
-documentation = ""
 repository = "http://github.com/isofit/isofit-plots"
 
 [project.scripts]
