@@ -1,3 +1,40 @@
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "isoplots"
+version = "0.0.1"
+description = "Plot Utilities for ISOFIT"
+readme = "README.rst"
+requires-python = ">=3.8"
+license = {file = "LICENSE"}
+keywords = ["isofit", "isofit-plots"]
+authors = [
+  {name = "James Montgomery", email = "J.Montgomery@jpl.nasa.gov"}
+]
+maintainers = [
+  {name = "James Montgomery", email = "J.Montgomery@jpl.nasa.gov"},
+  {name = "Philip Brodrick", email = "philip.brodrick@jpl.nasa.gov"}
+]
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+  "click",
+  "matplotlib",
+  "plotext",
+  "xarray",
+]
+
+[project.urls]
+documentation = ""
+repository = "http://github.com/isofit/isofit-plots"
+
+[project.scripts]
+isoplots = "isoplots:__main__.cli"
