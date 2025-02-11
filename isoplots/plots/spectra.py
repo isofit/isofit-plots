@@ -2,7 +2,6 @@ import click
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
-import plotext
 import xarray as xr
 from matplotlib.patches import Rectangle
 
@@ -102,8 +101,6 @@ def plot(file, output=None, title=None, terminal=False):
         Path to output file to save plots to, eg. ./spectra.png
     title : str, default=None
         Optional title to set
-    terminal : bool, default=False
-        Converts the matplotlib figure to plotext to be plotted into a terminal
     """
     ds = xr.open_dataset(file, engine='rasterio')
     da = ds.band_data
