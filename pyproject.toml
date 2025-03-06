@@ -39,9 +39,7 @@ dependencies = [
 [project.optional-dependencies]
 docs = [
   "mkdocs",
-  "mkapi",
-  "pytkdocs[numpy-style]",
-  "mkdocstrings[python]"
+  "mkapi"
 ]
 
 [project.urls]
