@@ -35,6 +35,13 @@ dependencies = [
   "xarray",
 ]
 
+[project.optional-dependencies]
+term = [
+  "PlotextPlot",
+  "rioxarray",
+  "textual",
+]
+
 [project.urls]
 repository = "http://github.com/isofit/isofit-plots"
 
