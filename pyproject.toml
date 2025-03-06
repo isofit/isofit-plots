@@ -30,9 +30,16 @@ classifiers = [
 ]
 dependencies = [
   "click",
+  "isofit",
   "matplotlib",
   "plotext",
   "xarray",
+]
+
+[project.optional-dependencies]
+docs = [
+  "mkdocs",
+  "mkapi"
 ]
 
 [project.urls]

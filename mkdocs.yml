@@ -1,0 +1,16 @@
+site_name: ISOFIT-Plots
+repo_name: isofit/isofit-plots
+repo_url: https://github.com/isofit/isofit-plots
+docs_dir: docs/
+theme:
+  name: readthedocs
+plugins:
+  - search:
+  - mkapi:
+
+nav:
+  - Home: index.md
+  - Getting Started: usage.md
+  - Plots:
+    - RTMs: plots/rtms/rtms.md
+  - API: $api/isoplots.***
