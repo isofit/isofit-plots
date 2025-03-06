@@ -1,9 +1,14 @@
+import warnings
+
 import click
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 from matplotlib.patches import Rectangle
+
+
+warnings.simplefilter("ignore")
 
 
 def findInterestingPixels(data):
@@ -23,21 +28,18 @@ def findInterestingPixels(data):
     """
     pixels = []
 
-    pixel = data.where(data == data.quantile(0.), drop=True).squeeze()
-    pixels.append([int(pixel.x.data), int(pixel.y)])
-
-    pixel = data.where(data == data.quantile(.5), drop=True)
-    pixels.append([int(pixel.x), int(pixel.y)])
-
-    pixel = data.where(data == data.quantile(1.), drop=True)
-    pixels.append([int(pixel.x), int(pixel.y)])
+    for quant in (0, .5, 1):
+        pixel = data.where(data == data.quantile(quant), drop=True).squeeze()
+        if pixel.size > 1:
+            pixel = pixel[0, 0]
+        pixels.append([int(pixel.x.data), int(pixel.y)])
 
     return pixels
 
 
 def plotSpectra(ax, data, pixel, removeMin=True, hideX=False, annotate=None, name=None, color=None):
     """
-    Plots a reflectance spectra for a given pixel
+    Plots the reflectance spectra for a given pixel
 
     Parameters
     ----------
@@ -70,13 +72,15 @@ def plotSpectra(ax, data, pixel, removeMin=True, hideX=False, annotate=None, nam
     ax.plot(data)
     ax.set_ylabel("Reflectance")
     ax.set_xlabel("Wavelength")
+    ax.grid(axis="x", color="gray", linestyle="--")
 
     ax.set_title(f"Spectra at {pixel}")
     if name:
         ax.set_title(f"Spectra {name} at {pixel}")
 
     if hideX:
-        ax.get_xaxis().set_visible(False)
+        ax.set_xlabel(None)
+        ax.set_xticklabels([])
 
     if annotate:
         rect = Rectangle(pixel, 1, 1, linewidth=1, edgecolor=color, facecolor='none')
