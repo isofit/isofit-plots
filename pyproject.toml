@@ -32,6 +32,7 @@ dependencies = [
   "click",
   "matplotlib",
   "plotext",
+  "rioxarray",
   "xarray",
 ]
 
