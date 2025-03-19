@@ -10,7 +10,7 @@ name = "isoplots"
 version = "0.0.2"
 description = "Plot Utilities for ISOFIT"
 readme = "README.rst"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {file = "LICENSE"}
 keywords = ["isofit", "isofit-plots"]
 authors = [
@@ -31,7 +31,9 @@ classifiers = [
 dependencies = [
   "click",
   "matplotlib",
+  "nicegui",
   "plotext",
+  "rioxarray",
   "xarray",
 ]
 
