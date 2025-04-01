@@ -1,279 +1,527 @@
 """
-WIP ISOFIT Output Parser
+ISOFIT Output Parser
 """
+import json
+import logging
+import re
+from functools import cached_property
 from pathlib import Path
 
+import xarray as xr
 from isofit.radiative_transfer import luts
 
 
-class LUTs:
-    lut_regex = r"(\w+)-(\d*\.?\d+)_?"
+class FileFinder:
+    """
+    Utility class to find files under a directory using various matching strategies
+    This must be subclassed and define the following:
+        function _load       - The loader for a passed file
+        attribute extensions - A list of extensions to retrieve
+    """
+    cache = None
+    extensions = []
 
-    def __init__(self, path):
-        self.path = Path(path)
-        self.data = {}
-
-        self.luts = {}
-        for file in self.path.glob("*.nc"):
-            self.luts[file.name] = file
-
-        # Try to parse any additional files
-        self.parseSixS()
-        self.parseModtran()
-
-    def __repr__(self):
-        return f"<{self.__class__.__name__}/{self.path.name}>"
-
-    def parseSixS(self):
-        self.sixs = {}
-        for file in self.path.glob("*.inp"):
-            matches = re.findall(self.lut_regex, file.stem[4:])
-            for (name, value) in matches:
-                quant = self.sixs.setdefault(name, set())
-                quant.add(float(value))
-
-    def parseModtran(self):
-        self.modtran = {}
-        for file in self.path.glob("*.json"):
-            matches = re.findall(self.lut_regex, file.stem[4:])
-            for (name, value) in matches:
-                quant = self.modtran.setdefault(name, set())
-                quant.add(float(value))
-
-    def load(self, name):
-        if not name.endswith(".nc"):
-            name += ".nc"
-
-        if name not in self.data:
-            self.data[name] = luts.load(self.luts[name])
-
-        return self.data[name]
-
-
-class IsofitWD:
-    _dirs = ("config", "data", "input", "lut_full", "lut_h2o", "output")
-
-    def __init__(self, path, invalid=False):
+    def __init__(self, path, cache=True, extensions=[]):
         """
-        TODO
-
         Parameters
         ----------
         path : str
-            Path to either an ISOFIT configuration file or an output directory. If a
-            config file, will attempt to detect the output directory from it.
-        invalid : bool, default=False
-            Allow an invalid path. This may be used to initialize an empty object and
-            change it via changePath()
+            Path to directory to operate on
+        cache : bool, default=True
+            Enable caching objects in the .load function
+        extensions : list, default=[]
+            File extensions to retrieve when searching
         """
-        self.dirs = {}
         self.path = Path(path)
-        self.data = None
-        self._logs = None
-        self.logFile = None
-        self.invalid = invalid
 
-        if self.path.is_file():
-            for parent in self.path.parents:
-                dirs = self.findSubdirs(parent)
-                if any(dirs.values()):
-                    self.path = parent
-                    self.data = IsofitData(self.path)
-                    break
-            else:
-                self._error("Could not find a valid working directory given the configuration file")
+        if extensions:
+            self.extensions = extensions
 
-        elif any((dirs := self.findSubdirs(self.path)).values()):
-            self.data = IsofitData(self.path)
+        if not self.extensions:
+            raise AttributeError("One or more extensions must be defined")
 
-        else:
-            self._error("Could not find a valid working directory")
+        if cache:
+            self.cache = {}
 
-        self.createChildren()
-
-    def createChildren(self):
-        for path in self.path.glob("*lut*"):
-            self.dirs[path.name] = LUTs(path)
-
-        self.dirs["config"] = IsofitConfigs(self.path / "config")
-        self.dirs["output"] = IsofitOutputs(self.path / "output")
-        self.dirs["data"]   = IsofitData(self.path / "data")
-        self.dirs["input"]  = IsofitInputs(self.path / "input")
-
+        self.log = logging.getLogger(str(self))
 
     def __repr__(self):
-        return f"<IsofitOutput: {self.path}>"
-
-    def changePath(self, *args, **kwargs):
-        """
-        Re-initializes the existing object by simply calling __init__. Useful for
-        maintaining a single object that must change working directories
-
-        Parameters
-        ----------
-        *args : list
-            Passthrough arguments
-        **kwargs : dict
-            Passthrough key-word arguments
-        """
-        self.__init__(*args, **kwargs)
-        return self
-
-    def findSubdirs(self, path):
-        return {
-            subdir: (path / subdir).exists()
-            for subdir in self._dirs
-        }
-
-    def makeTree(self):
-        tree = []
-        for _dir, data in IsofitFiles.items():
-            subpath = self.path / _dir
-            children = []
-            if subpath.exists():
-                tree.append({"id": _dir, "desc": data["desc"], "children": children})
-                for name, desc in data["files"].items():
-                    if files := list(subpath.glob(name)):
-                        for file in files:
-                            children.append({"id": file.name, "desc": desc})
-
-        return tree
-
-    def parseLogs(self, file=None):
-        if file:
-            self.logs = IsofitLogs(file)
-        else:
-            if not self.logs:
-                files = list(self.path.rglob("*.log"))
-                if files:
-                    self.logs = IsofitLogs(files[0])
-                else:
-                    print("No log file found")
-                    return
-
-    def setLogFile(self, file=None):
-        """
-        Sets the log file
-
-        Parameters
-        ----------
-        file : str, default=None
-            Filepath to a log file to parse. If None, resets the stored log file and
-            will attempt to automatically find one on the next access of the `logs`
-            attribute
-
-        Raises
-        -------
-        FileNotFoundError
-            If the provided log file does not exist
-        """
-        if file:
-            if not Path(file).exists():
-                return self._error(f"Log file does not exist: {file}")
-        self.logFile = file
+        return f"<{self.__class__.__name__} [{self.path}]>"
 
     @property
-    def logs(self):
-        if self._logs is None:
-            if self.logFile is None:
-                files = list(self.path.rglob("*.log"))
-                if files:
-                    self.logFile = files[0]
-
-            if self.logFile:
-                self._logs = IsofitLogs(self.logFile)
-            else:
-                self._error("No log file found. Please set one via setLogFile()")
-        return self._logs
-
-    def _error(self, message):
-        if not self.invalid:
-            raise FileNotFoundError(message)
-        print(message)
-
-
-# wd = IsofitWD("/Users/jamesmo/projects/isofit/research/NEON.bak/output/NIS01_20210403_173647")
-# wd.dirs
-#
-#%
-#
-l = LUTs("/Users/jamesmo/projects/isofit/research/jemit/lut_full")
-l = LUTs("/Users/jamesmo/projects/isofit/research/NEON.bak/output/NIS01_20210403_173647/lut_full")
-#%%
-path = Path("/Users/jamesmo/projects/isofit/extras/examples/20171108_Pasadena/configs")
-list(path.rglob("*.json"))
-
-#%%
-
-for file in path.rglob("*.json"):
-    break
-
-#%%
-
-
-class IsofitConfigs:
-    def __init__(self, path):
-        self.path = Path(path)
-
-    def getTree(self, *, path=None, tree={'': []}):
+    def files(self):
         """
-        Recursively finds the JSON files under a directory as a dict tree
+        Passthrough attribute to calling getFlat()
+        """
+        return self.getFlat()
+
+    def extMatches(self, file):
+        """
+        Checks if a given file's extension matches in the list of extensions
+        Special extension cases include:
+            "*" = Match any file
+            ""  = Only match files with no extension
 
         Parameters
         ----------
-        path : pathlib.Path
-            Directory to search
-        tree : dict, default={'': []}
-            Tree structure of discovered JSONS
+        file : pathlib.Path
+            File path to check
+
+        Returns
+        -------
+        bool
+            True if it matches one of the extensions, False otherwise
+        """
+        if file.is_dir():
+            return False
+        if "*" in self.extensions:
+            return True
+        return file.suffix in self.extensions
+
+    def getTree(self, *, path=None, tree=None):
+        """
+        Recursively finds the files under a directory as a dict tree
+
+        Parameters
+        ----------
+        path : pathlib.Path, default=None
+            Directory to search, defaults to self.path
+        tree : dict, default=None
+            Tree structure of discovered files
 
         Returns
         -------
         tree : dict
-            Tree structure of discovered JSONS. The keys are the directory names and
-            the list values are the found JSONS
+            Tree structure of discovered files. The keys are the directory names and
+            the list values are the found files
         """
         if path is None:
             path = self.path
 
+        if tree is None:
+            tree = {'': []}
+
         for item in path.glob("*"):
             if item.is_dir():
                 self.getTree(path=item, tree=tree.setdefault(item.name, {'': []}))
-            elif item.suffix == ".json":
+            elif self.extMatches(item):
                 tree[''].append(item.name)
 
         return tree
 
-    def getFlat(self):
+    def getFlat(self, path=None):
+        """
+        Finds all the files under a directory as a flat list with the base path removed
+
+        Parameters
+        ----------
+        path : pathlib.Path, default=None
+            Directory to search, defaults to self.path
+
+        Returns
+        -------
+        files : list[str]
+            List structure of discovered files
+        """
+        if path is None:
+            path = self.path
+
         files = []
-        for file in path.rglob("*.json"):
-            name = str(file).replace(f"{path}/", "")
-            files.append(name)
+        for file in self.path.rglob("*"):
+            if self.extMatches(file):
+                name = str(file).replace(f"{path}/", "")
+                files.append(name)
+
         return files
 
-    def get(self, name):
+    def ifin(self, name, all=False):
+        """
+        Simple if name in filename match
+
+        Parameters
+        ----------
+        name : str
+            String to check in the filename
+        all : bool, default=False
+            Return all files matched instead of the first instance
+
+        Returns
+        -------
+        str | list | None
+            First matched file if all is False, otherwise the full list
+        """
         found = []
-        for file in files:
+        for file in self.getFlat():
             if name in file:
                 found.append(file)
-        if len(found) > 1:
-            print(f"{len(found)} configuration files were found containing the provided name {name!r}, try being more specific. Returning just the first instance")
-        return found[0]
 
-io = IsofitConfigs(path)
-io.getTree()
-files = io.getFlat()
-files
-name = "surface"
+        if not all:
+            if len(found) > 1:
+                self.log.warning(f"{len(found)} files were found containing the provided name {name!r}, try being more specific. Returning just the first instance")
 
-#%%
+            if found:
+                return found[0]
+        return found
 
-parents = list(file.parents)
-if path in parents:
-    parents.pop(parents.index(path))
+    def match(self, regex, all=False):
+        """
+        Find files using a regex match
 
-#%%
+        Parameters
+        ----------
+        regex : str
+            Regex pattern to match with
+        all : bool, default=False
+            Return all files matched instead of the first instance
+
+        Returns
+        -------
+        str | list | None
+            First matched file if all is False, otherwise the full list
+        """
+        found = []
+        for file in self.getFlat():
+            if re.match(regex, file):
+                found.append(file)
+
+        if not all:
+            if len(found) > 1:
+                self.log.warning(f"{len(found)} files were found containing the provided regex {regex!r}, try being more specific. Returning just the first instance")
+
+            if found:
+                return found[0]
+        return found
+
+    def find(self, name, all=False):
+        """
+        Find files using a pre-built regex match. The regex will be in the form of:
+            (\S*{part}\S*) for each part in the name split by "/", delineated by "/"
+
+        For example:
+            abc/xyz = (\S*abc\S*/\S*xyz\S*)
+            part1/part2/part3 = (\S*part1\S*/\S*part2\S*/\S*part3\S*)
+
+        Use .match() for exact control of the regex string
+
+        Parameters
+        ----------
+        name : str
+            Name to parse into a regex string
+        all : bool, default=False
+            Return all files matched instead of the first instance
+
+        Returns
+        -------
+        str | list | None
+            First matched file if all is False, otherwise the full list
+        """
+        regex = "/".join([f"\S*{part}\S*" for part in name.split("/")])
+        regex = rf"({regex})"
+
+        return self.match(regex, all)
+
+    def load(self, *, path=None, ifin=None, find=None, match=None):
+        """
+        Loads a file
+
+        Parameters
+        ----------
+        path : str
+            Either the path to an existing file or the name of a file under self.path
+        ifin : str
+            Use the ifin function to find the file to load
+        find : str
+            Use the find function to find the file to load
+        match : str
+            Use the match function to find the file to load
+
+        Returns
+        -------
+        any
+            Returns the subclass's ._load(file)
+        """
+        if {path, ifin, find, match} == {None,}:
+            raise AttributeError("At least one of the key-word arguments must be set")
+
+        if path:
+            file = path
+        elif ifin:
+            file = self.ifin(ifin)
+        elif find:
+            file = self.find(find)
+        elif match:
+            file = self.match(match)
+
+        if file and not Path(file).exists():
+            file = self.path / file
+
+        if not file or not (file := Path(file)).exists():
+            raise FileNotFoundError(f"Cannot find file to load, attempted: {file}")
+
+        if self.cache is not None:
+            if file not in self.cache:
+                self.log.debug(f"Loading file: {file}")
+                self.cache[file] = self._load(file)
+
+            self.log.debug(f"Returning from cache: {file}")
+            return self.cache[file]
+
+        self.log.debug(f"Returning from load: {file}")
+        return self._load(file)
+
+    def _load(self, file):
+        raise NotImplementedError("Subclass must define this function")
 
 
+class Config(FileFinder):
+    extensions = [".json"]
+
+    def _load(self, file):
+        """
+        Loads a JSON file
+
+        Parameters
+        ----------
+        file : pathlib.Path
+            Path to file to load
+
+        Returns
+        -------
+        dict
+            Loaded JSON dict
+        """
+        with open(file, "rb") as f:
+            return json.load(f)
 
 
-files
+class Data(FileFinder):
+    extensions = [".mat", ".txt"]
+
+
+class LUT(FileFinder):
+    extensions = [".nc"]
+
+    lut_regex = r"(\w+)-(\d*\.?\d+)_?"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _load(self, file):
+        return luts.load(file)
+
+    def parseLutFiles(self, ext):
+        """
+        Parses LUT_*.{ext} files
+
+        Parameters
+        ----------
+        ext : str
+            File extension to retrieve:
+                sixs    = inp
+                modtran = json
+
+        Returns
+        -------
+        data : dict
+            Quantities to a set of their LUT values parsed from the file names
+        """
+        data = {}
+        for file in self.path.glob(f"*.{ext}"):
+            matches = re.findall(self.lut_regex, file.stem[4:]) # [4:] skips LUT_
+            for (name, value) in matches:
+                quant = data.setdefault(name, set())
+                quant.add(float(value))
+
+        return data
+
+    @cached_property
+    def sixs(self):
+        return self.parseLutFiles("inp")
+
+    @cached_property
+    def modtran(self):
+        return self.parseLutFiles("json")
+
+
+class Input(FileFinder):
+    extensions = [""]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        files = self.getFlat()
+
+        for file in files:
+            if not (self.path / file).with_suffix(".hdr").exists():
+                raise FileNotFoundError(f"Missing .hdr file for {file}")
+
+    def _load(self, file):
+        """
+        Loads an ENVI file
+
+        Parameters
+        ----------
+        file : pathlib.Path
+            Path to file to load
+
+        Returns
+        -------
+        xr.Dataset | xr.DataArray
+            Loaded xarray object from the ENVI. If the Dataset is only one variable,
+            returns the DataArray of that variable instead
+        """
+        if file.suffix:
+            file = file.with_suffix("")
+
+        ds = xr.open_dataset(file, engine="rasterio", lock=False)
+
+        if len(ds) == 1:
+            return ds[list(ds)[0]]
+
+
+class Output(FileFinder):
+    extensions = [""]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        files = self.getFlat()
+
+        for file in files:
+            if "subs" in file:
+                self.h2o = True
+            elif file.endswith("_rfl"):
+                self.name = file[:-4]
+
+        self.products = [file.replace(f"{self.name}_", "") for file in files]
+
+        for file in files:
+            if not (self.path / file).with_suffix(".hdr").exists():
+                raise FileNotFoundError(f"Missing .hdr file for {file}")
+
+    def _load(self, file):
+        """
+        Loads an ENVI file
+
+        Parameters
+        ----------
+        file : pathlib.Path
+            Path to file to load
+
+        Returns
+        -------
+        xr.Dataset | xr.DataArray
+            Loaded xarray object from the ENVI. If the Dataset is only one variable,
+            returns the DataArray of that variable instead
+        """
+        if file.suffix:
+            file = file.with_suffix("")
+
+        ds = xr.open_dataset(file, engine="rasterio", lock=False)
+
+        if len(ds) == 1:
+            return ds[list(ds)[0]]
+
+    def rgb(self, r=60, g=40, b=30):
+        """
+        Returns the RGB data of the RFL product
+
+        Parameters
+        ----------
+        r : int, default=60
+            Red band
+        g : int, default=40
+            Green band
+        b : int, default=30
+            Blue band
+
+        Returns
+        -------
+        xr.DataArray
+        """
+        data = self.load(path=f"{self.name}_rfl")
+
+        # Retrieve the RGB subset
+        rgb = data.sel(band=[r, g, b]).transpose('y', 'x', 'band')
+        rgb /= rgb.max(['x', 'y']) # Brightens image
+
+        # Convert to pixel coords for easier plotting
+        rgb['x'] = range(rgb.x.size)
+        rgb['y'] = range(rgb.y.size)
+
+        return rgb
+
+
+class IsofitWD(FileFinder):
+    extensions = ["*"]
+    classes = {
+        "config": Config,
+        "data"  : Data,
+        "input" : Input,
+        "lut"   : LUT,
+        "output": Output
+    }
+
+    def __init__(self, *args, **kwargs):
+        kwargs["cache"] = False
+
+        super().__init__(*args, **kwargs)
+
+        self.dirs = {}
+
+        dirs = set([self.subpath(file).parent.name for file in self.files])
+        for d in dirs:
+            for name, cls in self.classes.items():
+                if name in d:
+                    self.log.debug(f"Initializing {d} with class {cls.__name__}")
+                    self.dirs[d] = cls(self.path / d)
+
+    def __getattr__(self, key):
+        return self.__getitem__(key)
+
+    def __getitem__(self, key):
+        if key in self.dirs:
+            return self.dirs[key]
+
+    def _load(self, file):
+        parent, subpath = self.subpath(file, parent=True)
+
+        if parent in self.dirs:
+            return self.dirs[parent].load(path=subpath)
+        else:
+            print(f"Files on the root path are not supported at this time: {subpath}")
+
+    def subpath(self, path, parent=False):
+        """
+        Converts an absolute path to a relative path under self.path
+
+        Parameters
+        ----------
+        path : str
+            Either absolute or relative path, will assert it exists under self.path
+        parent : bool, default=False
+            Split the top-level parent from the subpath
+
+        Returns
+        -------
+        pathlib.Path | (str, pathlib.Path)
+            Relative path
+            If parent is enabled, returns the top-level parent separated from the path
+        """
+        path = Path(path)
+
+        if path.is_absolute():
+            path = path.relative_to(self.path)
+
+        if not (file := self.path / path).exists():
+            raise FileNotFoundError(file)
+
+        if parent:
+            parent = "."
+            if len(path.parents) >= 2:
+                # -1 = "./" == self.path
+                # -2 = "./dir/"
+                parent = path.parents[-2].name
+
+            return parent, path.relative_to(parent)
+        return path

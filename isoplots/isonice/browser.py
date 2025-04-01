@@ -16,6 +16,14 @@ import xarray as xr
 
 from nicegui import run, ui
 
+from isofit.radiative_transfer import luts
+
+# TODO: This will source from isofit once the PR is accepted
+try:
+    from isofit.utils.wd import IsofitWD
+except:
+    from isoplots.isonice.wd import IsofitWD
+
 dark = ui.dark_mode()
 dark.enable()
 
@@ -149,8 +157,8 @@ ui.add_head_html('''
 
 # Optional hard-coded output directories which will be added as buttons to quickly switch/load them
 WORKING_DIRS = {
-    # "NEON": "/Users/jamesmo/projects/isofit/research/NEON.bak/output/NIS01_20210403_173647/",
-    # "emit": "/Users/jamesmo/projects/isofit/research/jemit/"
+    "NEON": "/Users/jamesmo/projects/isofit/research/NEON.bak/output/NIS01_20210403_173647/",
+    "emit": "/Users/jamesmo/projects/isofit/research/jemit/"
 }
 
 
@@ -1010,12 +1018,173 @@ class Config:
         self.editor.run_editor_method('updateProps', {'readOnly': not event.value})
 
 
+
+def blankFig(fkw={}, lkw={}):
+    lkw = {
+        "margin": dict(l=0, r=20, t=0, b=0),
+        "paper_bgcolor": "rgba(0, 0, 0, 0)",
+        "showlegend": False,
+        "template": "plotly_dark",
+    } | lkw
+
+    fig = go.Figure(**fkw)
+    fig.update_layout(**lkw)
+
+    return fig
+
+
 class LUTs:
     def __init__(self):
-        ...
+        self.cards = []
+        self.data = {}
+
+        self.dropdowns = []
+        self.files = []
+        self.scroll = ui.scroll_area().classes("h-full w-full")
+        self.createCard()
+        self.createCard()
+        self.createCard()
 
     async def reset(self, isofit=None):
-        ...
+        if isofit and isofit.wd:
+            self.wd = isofit.wd
+
+        self.files.clear()
+        if self.wd:
+            self.luts = {name: obj for name, obj in self.wd.dirs.items() if isinstance(obj, self.wd.classes["lut"])}
+            for name, lut in self.luts.items():
+                self.files += [
+                    f"{name}/{file}"
+                    for file in lut.find("lut", all=True)
+                ]
+            for card in self.cards:
+                card["fileOpts"].set_options(self.files)
+            # for card in self.scroll:
+            #     print(card)
+            #     print(dir(card))
+                # card[0][0][0].set_options(self.files)
+
+    def changeFile(self, value, card):
+        new = set([value]) # TODO: When changing back to multiple=True, remove []
+        print("changeFile", value)
+        # print(dir(event.sender))
+        #
+        # card["data"] = {}
+        sel = card.setdefault("selected", set())
+
+        add = new - sel
+        for file in add:
+            if file not in self.data:
+                if Path(file).exists():
+                    print(f"Loading given LUT: {file}")
+                    try:
+                        self.data[file] = luts.load(file).unstack()
+                    except Exception as e:
+                        print(f"Failed to load, reason: {e}")
+                else:
+                    print(f"Loading LUT from WD: {file}")
+                    try:
+                        self.data[file] = self.wd.load(path=file).unstack()
+                    except Exception as e:
+                        print(f"Failed to load, reason: {e}")
+
+        remove = sel - new
+        # TODO
+
+        for file in new:
+            if file in self.data:
+                lut = self.data[file]
+
+                card.setdefault("luts", {})[file] = lut
+
+                plottable = set(lut) - set(lut.drop_dims("wl"))
+                card["quantOpts"].set_options(list(plottable))
+                # card["quantOpts"].visible = True
+                card['quantOpts'].enable()
+
+        card["quantOpts"].set_value(None)
+
+
+    def changeQuantities(self, value, card):
+        print("changeQuantities", value)
+        card["quant"] = value
+
+        dims = []
+        for file, lut in card["luts"].items():
+            if value in lut:
+                dims = set(lut[value].dims) - {"wl",}
+
+        card["dimOpts"].set_options(list(dims))
+        if dims:
+            # card["dimOpts"].visible = True
+            card['dimOpts'].enable()
+        else:
+            card['dimOpts'].disable()
+            self.changeDimensions(None, card)
+
+    def changeDimensions(self, value, card):
+        print("changeDimensions", value)
+
+        if card["quant"]:
+            for file, lut in card["luts"].items():
+                data = lut[card["quant"]]
+
+            # Dimensions to take a mean on (the not-selected dims)
+            dims = set(data.coords) - {"wl", value}
+            mean = data.mean(dims, skipna=True)
+            mean = mean.rename(wl="Wavelength")
+
+            # Split each value of the dim into its own variable
+            mean = mean.to_dataset(value)
+            df = mean.to_dataframe()
+
+            fig = px.line(df,
+                template = "plotly_dark",
+                labels = {"variable": value}
+            )
+        else:
+            fig = blankFig()
+
+        card["plot"].update_figure(fig)
+
+    def createCard(self):
+        self.cards.append({})
+        card = self.cards[-1]
+
+        with self.scroll:
+            with ui.card().classes("w-full border"):
+
+                with ui.column().classes("w-full"):
+                    with ui.row().classes("w-full"):
+                        card['fileOpts'] = ui.select(
+                            label = "LUT Files",
+                            options = [],
+                            multiple = False, # TODO
+                            new_value_mode = "add-unique",
+                            on_change = lambda e: self.changeFile(e.value, card)
+                        ).classes("w-1/4").props('use-chips')
+
+                        card['quantOpts'] = ui.select(
+                            label = "Select a LUT quantity",
+                            options = [],
+                            on_change = lambda e: self.changeQuantities(e.value, card)
+                        ).classes("w-1/4")
+                        # card['quantOpts'].visible = False
+                        card['quantOpts'].disable()
+
+                        card['dimOpts'] = ui.select(
+                            label = "Select a LUT dimension",
+                            options = [],
+                            on_change = lambda e: self.changeDimensions(e.value, card)
+                        ).classes("w-1/4")
+                        # card['dimOpts'].visible = False
+                        card['dimOpts'].disable()
+
+                        # ui.button(icon="restart_alt").props('outline round').classes('shadow-lg')
+                        # ui.button(icon="close").props('outline round').classes('shadow-lg')
+
+                    fig = blankFig(lkw={"height": 350})
+                    card['plot'] = ui.plotly(fig).classes('w-full')
 
 
 class Setup:
@@ -1144,6 +1313,10 @@ class Tabs:
             self.toggleTabs(False)
             return str(e)
 
+        self.isofit.wd = IsofitWD(value)
+        # if not self.isofit.dirs:
+        #     return "Could not parse as a valid ISOFIT output directory"
+
         self.toggleTabs(True)
         # self.resetTabs()
 
@@ -1218,8 +1391,8 @@ class Tabs:
             self.Spectra = Spectra()
 
     def luts(self):
-        panel = self.pnls["luts"]
-        panel.clear()
+        with self.pnls["luts"]:
+            self.LUTs = LUTs()
 
 
 GUI = Tabs()
@@ -1227,3 +1400,21 @@ GUI = Tabs()
 
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run()
+
+#%%
+
+# wd = IsofitWD("/Users/jamesmo/projects/isofit/research/jemit")
+
+# wd.lut_full.files
+
+def toNiceGUITree(tree, *, nodes=[], children=None):
+    for dpath, fpath in tree.items():
+        if isinstance(fpath, dict):
+            nodes.append({"id": dpath, "desc": None, "children": []})
+            toNiceGUITree(fpath, nodes=nodes[-1]["children"])
+        else:
+            for file in fpath:
+                nodes.append({"id": file, "desc": None})
+    return nodes
+
+# toNiceGUITree(wd.getTree())
