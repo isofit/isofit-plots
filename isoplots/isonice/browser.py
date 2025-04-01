@@ -157,8 +157,8 @@ ui.add_head_html('''
 
 # Optional hard-coded output directories which will be added as buttons to quickly switch/load them
 WORKING_DIRS = {
-    "NEON": "/Users/jamesmo/projects/isofit/research/NEON.bak/output/NIS01_20210403_173647/",
-    "emit": "/Users/jamesmo/projects/isofit/research/jemit/"
+    # "NEON": "/Users/jamesmo/projects/isofit/research/NEON.bak/output/NIS01_20210403_173647/",
+    # "emit": "/Users/jamesmo/projects/isofit/research/jemit/"
 }
 
 
