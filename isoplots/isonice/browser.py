@@ -157,9 +157,9 @@ ui.add_head_html('''
 
 # Optional hard-coded output directories which will be added as buttons to quickly switch/load them
 WORKING_DIRS = {
-    "NEON": "/Users/jamesmo/projects/isofit/research/NEON.bak/output/NIS01_20210403_173647/",
-    "emit": "/Users/jamesmo/projects/isofit/research/jemit/",
-    "Pasadena": "/Users/jamesmo/projects/isofit/extras/examples/20171108_Pasadena"
+    # "NEON": "/Users/jamesmo/projects/isofit/research/NEON.bak/output/NIS01_20210403_173647/",
+    # "emit": "/Users/jamesmo/projects/isofit/research/jemit/",
+    # "Pasadena": "/Users/jamesmo/projects/isofit/extras/examples/20171108_Pasadena"
 }
 
 
@@ -507,7 +507,6 @@ def multiplot(figs=[], height=300):
     })
 
     for i, plot in enumerate(figs):
-        print(type(plot))
         for trace in plot.data:
             fig.add_trace(trace, row=i+1, col=1)
 
@@ -521,60 +520,6 @@ class MultiPlotLUT:
     tab
     """
     isofit = None
-
-    def b__init__(self, files=None, cache=None):
-        """
-        Parameters
-        ----------
-        files : list, default=None
-            Shared NiceGUI observables for the files options, otherwise will be an
-            independent list
-        cache : dict, default=None
-            Shared cache dict if provided, otherwise creates one for this object
-        """
-        if files is None:
-            files = observables.ObservableList([], on_change=self.setOptions)
-        self.files = files
-
-        if cache is None:
-            cache = {}
-        self.cache = cache
-
-        self.selects = []
-        self.plots = [self.blank]
-        self.luts = [None]
-
-        with ui.card().classes("w-full border"):
-            with ui.column().classes("w-full") as self.column:
-                with ui.row().classes("w-full"):
-                    select = ui.select(
-                        label = "LUT File",
-                        options = self.files,
-                        multiple = False, # TODO?
-                        new_value_mode = "add-unique",
-                        on_change = lambda e: self.changeFile(e.value)
-                    ).classes("w-1/4").props('use-chips')
-                    self.selects.append(select)
-
-                    self.quants = ui.select(
-                        label = "Select a LUT quantity",
-                        options = [],
-                        on_change = lambda e: self.changeQuant(e.value)
-                    ).classes("w-1/4")
-                    self.quants.disable()
-
-                    self.dims = ui.select(
-                        label = "Select a LUT dimension",
-                        options = [],
-                        on_change = lambda e: self.changeDim(e.value)
-                    ).classes("w-1/4")
-                    self.dims.disable()
-
-                    ui.button("Add Subplot",
-                        on_click = lambda: self.createSubplot()
-                    ).props("outline")
-
-                self.ui = ui.plotly(multiplot()).classes("w-full")
 
     def __init__(self, files=None, cache=None):
         """
@@ -599,40 +544,63 @@ class MultiPlotLUT:
 
         with ui.card().classes("w-full border"):
             with ui.column().classes("w-full") as self.column:
-                with ui.row().classes("w-full"):
+                # with ui.splitter(value=90).classes("w-full") as splitter:
+                #     with splitter.before:
+
+                with ui.row().classes("w-full items-center"):
                     self.main["select"] = ui.select(
                         label = "LUT File",
                         options = self.files,
                         multiple = False, # TODO?
                         new_value_mode = "add-unique",
                         on_change = lambda e: self.changeFile(e.value)
-                    ).classes("w-1/4").props('use-chips')
+                    ).classes("w-[56%]").props('use-chips')
                     # self.selects.append(select)
 
                     self.quants = ui.select(
                         label = "Select a LUT quantity",
                         options = [],
                         on_change = lambda e: self.changeQuant(e.value)
-                    ).classes("w-1/4")
+                    ).classes("w-[15%]")
                     self.quants.disable()
 
                     self.dims = ui.select(
                         label = "Select a LUT dimension",
                         options = [],
                         on_change = lambda e: self.changeDim(e.value)
-                    ).classes("w-1/4")
+                    ).classes("w-[15%]")
                     self.dims.disable()
 
-                    ui.button("Add Subplot",
-                        on_click = lambda: self.createSubplot()
-                    ).props("outline")
+                    # with splitter.after:
+                    # ui.button("Add Subplot",
+                    #     on_click = lambda: self.createSubplot()
+                    # ).props("outline").classes("h-full w-[5%]")
+
+                    ui.button(
+                        icon = "question_mark",
+                        # on_click = lambda: self.deleteSubplot(plot),
+                    ).props("outline round") \
+                    .classes("ml-auto") \
+                    .tooltip("Select a LUT file or provide a path to a LUT file to load the quantities. Then select a quantity to load the dimensions. Finally, select a dimension to plot.")
+
+                    ui.button(
+                        icon = "add",
+                        on_click = self.createSubplot,
+                    ).props("outline round") \
+                    .classes("ml-auto") \
+                    .tooltip("Add subplot. This will share X and Y axes as well as quantity and dimension with the main plot")
+
+                    ui.button(
+                        icon = "close",
+                        on_click = self.delete,
+                    ).props("outline round") \
+                    .classes("ml-auto") \
+                    .tooltip("Removes this entire plot group")
 
                 self.ui = ui.plotly(multiplot()).classes("w-full")
 
-    def _setOptions(self, event=None):
-        print("local setOptions")
-        for select in self.selects:
-            select.set_options(self.files)
+    def delete(self):
+        print("DELETE: NYI")
 
     def setOptions(self, event=None):
         print("local setOptions")
@@ -647,46 +615,23 @@ class MultiPlotLUT:
             "select": None
         }
 
-    def _createSubplot(self):
-        i = len(self.plots)
-        self.plots.append(self.blank)
-        self.luts.append(None)
-
-        with self.column:
-            with ui.row().classes("w-full"):
-                select = ui.select(
-                    label = f"LUT File for Plot {i+1}",
-                    options = self.files,
-                    new_value_mode = "add-unique",
-                    on_change = lambda e: self.updateSubplot(i, file=e.value)
-                ).classes("w-4/5")
-                self.selects.append(select)
-
-                ui.button("Remove",
-                    on_click = lambda: self.deleteSubplot(i)
-                ).props("outline")
-
-        # Shift to bottom of the card
-        self.ui.move(target_index=-1)
-
-        self.updateUI()
-
     def createSubplot(self):
         plot = self.new
         self.plots.append(plot)
 
         with self.column:
-            with ui.row().classes("w-full"):
+            with ui.row().classes("w-full items-center"):
                 plot["select"] = ui.select(
                     label = f"LUT File for Plot {len(self.plots)}",
                     options = self.files,
                     new_value_mode = "add-unique",
                     on_change = lambda e: self.updateSubplot(plot, file=e.value)
-                ).classes("w-4/5")
+                ).classes("w-[96%]")
 
-                ui.button("Remove",
-                    on_click = lambda: self.deleteSubplot(plot)
-                ).props("outline")
+                ui.button(
+                    icon = "close",
+                    on_click = lambda: self.deleteSubplot(plot),
+                ).props("outline round").tooltip("Remove subplot").classes("ml-auto")
 
         # Shift to bottom of the card
         self.ui.move(target_index=-1)
@@ -716,18 +661,6 @@ class MultiPlotLUT:
         )
         self.updateUI()
 
-    def _updateSubplot(self, i, file):
-        if (lut := self.load(file)) is None:
-            return
-
-        self.luts[i] = lut
-        self.plots[i] = self.plot(
-            lut   = self.luts[i],
-            quant = self.quant,
-            dim   = self.dim
-        )
-        self.updateUI()
-
     def load(self, file):
         if file not in self.cache:
             if Path(file).exists():
@@ -748,13 +681,6 @@ class MultiPlotLUT:
     def update(self, isofit=None):
         if isofit:
             self.isofit = isofit
-
-    def _updateUI(self):
-        """
-        Updates the GUI with a newly constructed multi-plot figure
-        """
-        fig = multiplot(self.plots)
-        self.ui.update_figure(fig)
 
     def updateUI(self):
         """
@@ -828,7 +754,6 @@ class MultiPlotLUT:
             return self.blank
 
     @property
-    @staticmethod
     def blank(self):
         """
         Creates a blank plotly figure with an empty scatter trace so that it renders
@@ -1455,5 +1380,3 @@ GUI = Tabs()
 
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run()
-
-#%%
