@@ -14,7 +14,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import xarray as xr
 
-from nicegui import run, ui
+from nicegui import observables, run, ui
 
 from isofit.radiative_transfer import luts
 
@@ -23,6 +23,9 @@ try:
     from isofit.utils.wd import IsofitWD
 except:
     from isoplots.isonice.wd import IsofitWD
+
+# Global shared working directory
+WD = IsofitWD(".")
 
 dark = ui.dark_mode()
 dark.enable()
@@ -487,6 +490,21 @@ def blankFig(fkw={}, lkw={}):
 #%%
 
 def multiplot(figs=[], height=300):
+    """
+    Creates a multi plot object that shares X and Y axes
+
+    Parameters
+    ----------
+    figs : list[go.Figure]
+        List of subplots to add
+    height : int, default=300
+        Height of each subplot
+
+    Returns
+    -------
+    fig : go.Figure
+        Plotly figure with one or more subplots
+    """
     # Ensure at least one figure is set
     if not figs:
         figs = [go.Figure()]
@@ -508,7 +526,20 @@ def multiplot(figs=[], height=300):
 
     for i, plot in enumerate(figs):
         for trace in plot.data:
+            # fig.update_layout(legendgroup=f"{i+1}")
             fig.add_trace(trace, row=i+1, col=1)
+
+    # TODO: Get subplots to have their own legends
+    # Does not work
+    try:
+        for i, yaxis in enumerate(fig.select_yaxes()):
+            i += 1
+            legend_name = f"legend{i}"
+            if yaxis.domain is not None:
+                fig.update_layout({legend_name: dict(y=yaxis.domain[1], yanchor="top")}, showlegend=True)
+                fig.update_traces(row=i, legend=legend_name)
+    except:
+        pass
 
     return fig
 
@@ -521,16 +552,20 @@ class MultiPlotLUT:
     """
     isofit = None
 
-    def __init__(self, files=None, cache=None):
+    def __init__(self, parent, files=None, cache=None):
         """
         Parameters
         ----------
+        parent : LUT
+            Parent LUT class that hosts this object
         files : list, default=None
             Shared NiceGUI observables for the files options, otherwise will be an
             independent list
         cache : dict, default=None
             Shared cache dict if provided, otherwise creates one for this object
         """
+        self.parent = parent
+
         if files is None:
             files = observables.ObservableList([], on_change=self.setOptions)
         self.files = files
@@ -542,12 +577,14 @@ class MultiPlotLUT:
         self.main = self.new
         self.plots = [self.main]
 
+        # Defaults
+        self.quant = None
+        self.dim = None
+
         with ui.card().classes("w-full border"):
             with ui.column().classes("w-full") as self.column:
-                # with ui.splitter(value=90).classes("w-full") as splitter:
-                #     with splitter.before:
-
                 with ui.row().classes("w-full items-center"):
+
                     self.main["select"] = ui.select(
                         label = "LUT File",
                         options = self.files,
@@ -555,7 +592,6 @@ class MultiPlotLUT:
                         new_value_mode = "add-unique",
                         on_change = lambda e: self.changeFile(e.value)
                     ).classes("w-[56%]").props('use-chips')
-                    # self.selects.append(select)
 
                     self.quants = ui.select(
                         label = "Select a LUT quantity",
@@ -570,11 +606,6 @@ class MultiPlotLUT:
                         on_change = lambda e: self.changeDim(e.value)
                     ).classes("w-[15%]")
                     self.dims.disable()
-
-                    # with splitter.after:
-                    # ui.button("Add Subplot",
-                    #     on_click = lambda: self.createSubplot()
-                    # ).props("outline").classes("h-full w-[5%]")
 
                     ui.button(
                         icon = "question_mark",
@@ -592,23 +623,31 @@ class MultiPlotLUT:
 
                     ui.button(
                         icon = "close",
-                        on_click = self.delete,
+                        on_click = lambda: parent.deletePlot(self)
                     ).props("outline round") \
                     .classes("ml-auto") \
                     .tooltip("Removes this entire plot group")
 
                 self.ui = ui.plotly(multiplot()).classes("w-full")
 
-    def delete(self):
-        print("DELETE: NYI")
-
-    def setOptions(self, event=None):
-        print("local setOptions")
+    def setOptions(self, *_):
+        """
+        Updates each file selection dropdown with the self.files list
+        This is called each time the list is updated
+        """
         for plot in self.plots:
             plot["select"].set_options(self.files)
 
     @property
     def new(self):
+        """
+        Creates a dict with default values to be used for a new plot
+
+        Returns
+        -------
+        dict
+            Default values for a new plot
+        """
         return {
             "plot": self.blank,
             "lut": None,
@@ -672,15 +711,11 @@ class MultiPlotLUT:
             else:
                 print(f"Loading LUT from WD: {file}")
                 try:
-                    self.cache[file] = self.isofit.load(path=file).unstack()
+                    self.cache[file] = WD.load(path=file).unstack()
                 except Exception as e:
                     print(f"Failed to load, reason: {e}")
 
         return self.cache.get(file)
-
-    def update(self, isofit=None):
-        if isofit:
-            self.isofit = isofit
 
     def updateUI(self):
         """
@@ -691,35 +726,42 @@ class MultiPlotLUT:
         self.ui.update_figure(fig)
 
     def changeFile(self, file):
+        self.quants.disable()
+        self.dims.disable()
+
         if (lut := self.load(file)) is None:
             return
 
         self.main["lut"] = lut
-        # self.luts[0] = lut
 
         plottable = set(lut) - set(lut.drop_dims("wl"))
         if plottable:
-            self.quants.set_options(list(plottable))
+            self.quants.set_options(sorted(plottable))
             self.quants.enable()
 
         self.quants.set_value(None)
 
-    def changeQuant(self, quant=None):
+    def changeQuant(self, quant):
         print("changeQuantities", quant)
         self.quant = quant
 
-        # lut = self.luts[0]
         lut = self.main["lut"]
-        dims = set(lut[quant].dims) - {"wl",}
 
-        self.dims.set_options(list(dims))
+        dims = []
+        if quant in lut:
+            dims = set(lut[quant].dims) - {"wl",}
+
+        self.dims.set_options(sorted(dims))
+
         if dims:
             self.dims.enable()
         else:
             self.dims.disable()
-            self.changeDim()
 
-    def changeDim(self, dim=None):
+        # self.dims.set_value(None)
+        self.changeDim(self.dim)
+
+    def changeDim(self, dim):
         print("changeDimensions", dim)
         self.dim = dim
 
@@ -734,6 +776,23 @@ class MultiPlotLUT:
         self.updateUI()
 
     def plot(self, lut, quant, dim):
+        """
+        Attempts to create a LUT plot
+
+        Parameters
+        ----------
+        lut : xr.Dataset
+            LUT data object
+        quant : str
+            Quantity to select
+        dim : str
+            Dimension to plot along. All other dimensions will be averaged
+
+        Returns
+        -------
+        go.Figure
+            Either the plotted figure or a blank if it failed
+        """
         try:
             data = lut[quant]
             dims = set(data.coords) - {"wl", dim}
@@ -750,7 +809,6 @@ class MultiPlotLUT:
             )
         except Exception as e:
             print(f"Failed to plot {quant}[{dim}], reason: {e}")
-            print(lut)
             return self.blank
 
     @property
@@ -766,11 +824,9 @@ class MultiPlotLUT:
         """
         return go.Figure(go.Scatter())
 
-from nicegui import observables
+
 
 class LUTs:
-    blank = property(lambda self: go.Figure(go.Scatter()))
-
     def __init__(self, parent):
         """
         Parameters
@@ -780,284 +836,78 @@ class LUTs:
         """
         self.parent = parent
 
-        self.cards = []
-        self.data = {}
-        self.luts = {}
+        # Stores MultiPlotLUT objects
+        self.plots = []
+
+        # Shared LUT cache
         self.cache = {}
 
-        self.dropdowns = []
-        self.files = []
+        # Shared file options
         self.files = observables.ObservableList([], on_change=self.setOptions)
+
         with ui.scroll_area().classes("h-full w-full") as self.scroll:
-            self.addCardBtn = ui.button("Add New Independent Plot", on_click=self.createCard).classes("w-full").props("outline")
+            self.addPlotBtn = ui.button(
+                "Add New Independent Plot",
+                on_click = self.createPlot
+            ).classes("w-full") \
+            .props("outline")
 
-        self.createCard()
+        # Create an initial plot
+        self.createPlot()
 
-    def setOptions(self, event):
-        print("global setOptions")
-        # for card in self.cards:
-        #     card["fileOpts"].set_options(self.files)
-        for card in self.cards:
-            card.setOptions()
-
-    async def reset(self, isofit=None):
+    def setOptions(self, *_):
         """
-        Resets the tab with a new IsofitWD object
+        Calls each MultiPlotLUT to set the file options
+
+        This function is called any time the self.files list is updated, such as when
+        the WD is changed or a manual input is given
+        """
+        for plot in self.plots:
+            plot.setOptions()
+
+    def createPlot(self):
+        """
+        Creates a new plot group using the MultiPlotLUT class
+        """
+        with self.scroll:
+            plot = MultiPlotLUT(self, files=self.files, cache=self.cache)
+            self.plots.append(plot)
+
+        # Move the button to the bottom
+        self.addPlotBtn.move(target_index=-1)
+
+    def deletePlot(self, plot):
+        """
+        Removes a plot group from the interface permanently
 
         Parameters
         ----------
-        isofit : IsofitWD, default=None
-            Working Isofit Directory object
+        card : MultiPlotLUT
+            Card to be removed
+        """
+        i = self.plots.index(plot)
+        self.scroll.remove(i)
+        self.plots.pop(i)
+
+    async def reset(self, *_):
+        """
+        Resets the the file options when the WD changes
         """
         self.files.clear()
-        if isofit is not None:
-            self.isofit = isofit
 
-            self.luts = {name: obj for name, obj in isofit.dirs.items() if isinstance(obj, isofit.classes["lut"])}
-            for name, lut in self.luts.items():
-                self.files += [
-                    f"{name}/{file}"
-                    for file in lut.find("lut", all=True)
-                ]
-            for card in self.cards:
-                card.isofit = isofit
-            #     card["fileOpts"].set_options(self.files)
+        # Retrieve the known LUT files of this WD
+        luts = {
+            name: obj
+            for name, obj in WD.dirs.items()
+            if isinstance(obj, WD.classes["lut"])
+        }
 
-    def load(self, file):
-        if file not in self.luts:
-            if Path(file).exists():
-                print(f"Loading given LUT: {file}")
-                try:
-                    self.luts[file] = luts.load(file).unstack()
-                except Exception as e:
-                    print(f"Failed to load, reason: {e}")
-            else:
-                print(f"Loading LUT from WD: {file}")
-                try:
-                    self.luts[file] = self.isofit.load(path=file).unstack()
-                except Exception as e:
-                    print(f"Failed to load, reason: {e}")
-
-        return self.luts.get(file)
-
-    def changeFile(self, value, card):
-        # new = set([value]) # TODO: When changing back to multiple=True, remove []
-        print("changeFile", value)
-        if (lut := self.load(value)) is None:
-            return
-
-        card["lut"] = lut
-
-        plottable = set(lut) - set(lut.drop_dims("wl"))
-        if plottable:
-            card["quantOpts"].set_options(list(plottable))
-            card['quantOpts'].enable()
-
-        card["quantOpts"].set_value(None)
-
-        # card["data"] = {}
-        # sel = card.setdefault("selected", set())
-
-        # add = new - sel
-        # for file in add:
-        #     self.load(file)
-
-        # remove = sel - new
-        # TODO
-
-        # for file in new:
-        #     if file in self.data:
-        #         lut = self.data[file]
-        #
-        #         card.setdefault("luts", {})[file] = lut
-        #
-        #         plottable = set(lut) - set(lut.drop_dims("wl"))
-        #         card["quantOpts"].set_options(list(plottable))
-        #         # card["quantOpts"].visible = True
-        #         card['quantOpts'].enable()
-        # card.setdefault("luts", {})[file] = lut
-
-    def changeQuantities(self, value, card):
-        print("changeQuantities", value)
-        card["quant"] = value
-
-        # dims = []
-        # for file, lut in card["luts"].items():
-        #     if value in lut:
-        #         dims = set(lut[value].dims) - {"wl",}
-        dims = set(card["lut"][value].dims) - {"wl",}
-
-        card["dimOpts"].set_options(list(dims))
-        if dims:
-            # card["dimOpts"].visible = True
-            card['dimOpts'].enable()
-        else:
-            card['dimOpts'].disable()
-            self.changeDimensions(None, card)
-
-    def changeDimensions(self, value, card):
-        print("changeDimensions", value)
-        card["dim"] = value
-
-        card["plots"][0] = self.plot(
-            lut = card["lut"],
-            quant = card["quant"],
-            dim = card["dim"]
-        )
-
-        # if card["quant"]:
-        #     card["plots"][0] = self.plot(
-        #         lut = card["lut"],
-        #         quant = card["quant"],
-        #         dim = card["dim"]
-        #     )
-        # else:
-        #     card["plots"][0] = self.blank
-
-        self.updatePlot(card)
-
-        # Update subplots as well
-        # for
-
-    def plot(self, lut, quant, dim):
-        try:
-            data = lut[quant]
-            dims = set(data.coords) - {"wl", dim}
-            mean = data.mean(dims, skipna=True)
-            mean = mean.rename(wl="Wavelength")
-
-            # Split each value of the dim into its own variable
-            mean = mean.to_dataset(dim)
-            df = mean.to_dataframe()
-
-            return px.line(df,
-                template = "plotly_dark",
-                labels = {"variable": dim}
-            )
-        except Exception as e:
-            print(f"Failed to plot {quant}[{dim}], reason: {e}")
-            print(lut)
-            return self.blank
-
-    def updateCardPlot(self, card, i, file=None):
-        if file:
-            if (lut := self.load(file)) is None:
-                return
-
-            card["plots"][i] = self.plot(
-                lut = lut,
-                quant = card["quant"],
-                dim = card["dim"]
-            )
-            self.updatePlot(card)
-
-    def updatePlot(self, card):
-        fig = multiplot(card["plots"])
-        card["plot"].update_figure(fig)
-
-    def createCardPlot(self, card):
-        plots = card.setdefault("plots", [])
-
-        i = len(plots)
-        plots.append(self.blank)
-        card["plot"].update_figure(multiplot(plots))
-
-        with card["column"]:
-            # self.addCardBtn.move(target_index=-1)
-            ui.select(
-                label = f"LUT File for Plot {i+1}",
-                options = self.files,
-                new_value_mode = "add-unique",
-                on_change = lambda e: self.updateCardPlot(card, i, file=e.value)
-            ).classes("w-full")
-
-        # Shift to bottom of the card
-        card["plot"].move(target_index=-1)
-
-            # with ui.row().classes("w-full"):
-            #     ui.select(
-            #         label = "LUT File",
-            #         options = self.files,
-            #         multiple = False, # TODO
-            #         new_value_mode = "add-unique",
-            #         on_change = lambda e: self.updateCardPlot(card, i, file=e.value)
-            #     ).classes("w-full")
-
-            # fig = blankFig(height=350)
-            # plot = ui.plotly(fig).classes('w-full')
-            # plots.append(plot)
-
-            # multi = make_subplots(rows=2, cols=1, shared_xaxes=True, shared_yaxes=True)
-            # for trace in fig.data:
-            #     multi.add_trace(trace, row=1, col=1)
-            # for trace in fig.data:
-            #     multi.add_trace(trace, row=2, col=1)
-            # multi
-
-    def _createCard(self):
-        self.cards.append({})
-        card = self.cards[-1]
-
-        with self.scroll:
-            with ui.card().classes("w-full border"):
-                with ui.column().classes("w-full") as card["column"]:
-                    with ui.row().classes("w-full"):
-                        card['fileOpts'] = ui.select(
-                            label = "LUT File",
-                            options = self.files,
-                            multiple = False, # TODO
-                            new_value_mode = "add-unique",
-                            on_change = lambda e: self.changeFile(e.value, card)
-                        ).classes("w-1/4").props('use-chips')
-
-                        card['quantOpts'] = ui.select(
-                            label = "Select a LUT quantity",
-                            options = [],
-                            on_change = lambda e: self.changeQuantities(e.value, card)
-                        ).classes("w-1/4")
-                        # card['quantOpts'].visible = False
-                        card['quantOpts'].disable()
-
-                        card['dimOpts'] = ui.select(
-                            label = "Select a LUT dimension",
-                            options = [],
-                            on_change = lambda e: self.changeDimensions(e.value, card)
-                        ).classes("w-1/4")
-                        # card['dimOpts'].visible = False
-                        card['dimOpts'].disable()
-
-                        # ui.button(icon="restart_alt").props('outline round').classes('shadow-lg')
-                        # ui.button(icon="close").props('outline round').classes('shadow-lg')
-                        ui.button("Add Subplot",
-                            on_click = lambda: self.createCardPlot(card)
-                        ).props("outline")
-
-                    # fig = blankFig(lkw={"height": 350})
-                    fig = multiplot()
-                    card["plot"] = ui.plotly(fig).classes("w-full")
-                    card["plots"] = [self.blank]
-                    # card["plot"].on("plotly_relayout", lambda e: self.relayout(card, e))
-
-        self.addCardBtn.move(target_index=-1)
-
-    def createCard(self):
-        # self.cards.append({})
-        # card = self.cards[-1]
-
-        with self.scroll:
-            card = MultiPlotLUT(files=self.files, cache=self.cache)
-            self.cards.append(card)
-
-        self.addCardBtn.move(target_index=-1)
-
-    def relayout(self, card, event):
-        plots = card.get("plots", [])
-        # for i in range(len(plots)):
-        #     self.updateCardPlot(card, i)
-        plot = card["plot"]
-        fig = plot.figure
-        # print(fig.layout.xaxis.range)
-        # print(fig.layout.yaxis.range)
+        for name, lut in luts.items():
+            self.files += [
+                f"{name}/{file}"
+                for file in lut.find("lut", all=True)
+            ]
+        self.files.sort()
 
 
 def toNiceGUITree(tree, *, nodes=None):
@@ -1239,7 +1089,7 @@ class Setup:
         #     # Output to UI the error
         #     self.parent.toggleTabs(all=False)
         #     return str(e)
-
+        WD.reset(value)
         isofit = IsofitWD(value)
         self.parent.isofit = isofit
         # if not self.isofit.dirs:
@@ -1380,3 +1230,7 @@ GUI = Tabs()
 
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run()
+
+#%%
+
+# wd = IsofitWD("/Users/jamesmo/projects/isofit/research/jemit")
