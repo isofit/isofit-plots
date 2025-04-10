@@ -157,8 +157,9 @@ ui.add_head_html('''
 
 # Optional hard-coded output directories which will be added as buttons to quickly switch/load them
 WORKING_DIRS = {
-    # "NEON": "/Users/jamesmo/projects/isofit/research/NEON.bak/output/NIS01_20210403_173647/",
-    # "emit": "/Users/jamesmo/projects/isofit/research/jemit/"
+    "NEON": "/Users/jamesmo/projects/isofit/research/NEON.bak/output/NIS01_20210403_173647/",
+    "emit": "/Users/jamesmo/projects/isofit/research/jemit/",
+    "Pasadena": "/Users/jamesmo/projects/isofit/extras/examples/20171108_Pasadena"
 }
 
 
@@ -167,66 +168,8 @@ def plotlyColor(i):
     return c[i % len(c)]
 
 
-IsofitFiles = {
-    "config": {
-        "desc": "Configuration JSON files",
-        "files": {
-            # Presolve
-            "*_h2o.json": "TODO",
-            "*_h2o.json.tmpl": "TODO",
-            "*_h2o_tpl.json": "TODO",
-            # Full
-            "*_isofit.json": "TODO",
-            "*_isofit.json.tmpl": "TODO",
-            "*_modtran_tpl.json": "TODO",
-        },
-    },
-    "data": {
-        "desc": "TODO",
-        "files": {
-            "channelized_uncertainty.txt": "TODO",
-            "model_discrepancy.mat": "TODO",
-            "surface.mat": "TODO",
-            "wavelengths.txt": "TODO"
-        },
-    },
-    "lut_h2o": {
-        "desc": "TODO",
-        "files": {
-            "6S.lut.nc": "LUT produced by the SixS radiative transfer model for sRTMnet",
-            "lut.nc": "Look-Up-Table for the radiative transfer model",
-            "sRTMnet.predicts.nc": "Output predicts of sRTMnet"
-        },
-    },
-    "lut_full": {
-        "desc": "TODO",
-        "files": {
-            "6S.lut.nc": "LUT produced by the SixS radiative transfer model for sRTMnet",
-            "lut.nc": "Look-Up-Table for the radiative transfer model",
-            "sRTMnet.predicts.nc": "Output predicts of sRTMnet"
-        },
-    },
-    "output": {
-        "desc": "TODO",
-        "files": {
-            # Presolve
-            "*_subs_atm": "TODO",
-            "*_subs_h2o": "TODO",
-            "*_subs_rfl": "TODO",
-            "*_subs_state": "TODO",
-            "*_subs_uncert": "TODO",
-            # Full
-            "*_atm_interp": "TODO",
-            "*_rfl": "TODO",
-            "*_lbl": "TODO",
-            "*_uncert": "TODO",
-        }
-    }
-}
-
-
-class IsofitLogs:
-    _lvlColors = {
+class Logs:
+    colors = {
         "DEBUG"    : "grey",
         "INFO"     : "cyan",
         "WARNING"  : "yellow",
@@ -234,535 +177,17 @@ class IsofitLogs:
         "EXCEPTION": "magenta"
     }
 
-    selected = {}
-    filtered = None
-
-    def __init__(self, file):
-        self.file  = file
-        self.stats = []
-
-        self.parse()
-        self.extract()
-
-    def parse(self):
-        """
-        Parses an ISOFIT log file into a dictionary of content that can be used to
-        filter and reconstruct lines into different formats
-
-        Returns
-        -------
-        content : list[dict]
-            Parsed content from the log file in the form:
-                {
-                    "timestamp": str,
-                    "level": str,
-                    "message": str
-                }
-        """
-        with open(self.file) as file:
-            lines = file.readlines()
-
-        self.lvls = set()
-        content = []
-        for line in lines:
-            if (find := re.findall(r"(\w+):(\S+) \|\| (\S+) \| (.*)", line)):
-                [find] = find
-                level = find[0]
-                self.lvls.add(level)
-
-                source = find[2]
-                content.append({
-                    "timestamp": find[1],
-                    "level"    : level,
-                    "message"  : find[3]
-                })
-            elif (find := re.findall(r"(\w+):(\S+) \|\|\|? (.*)", line)):
-                [find] = find
-                level = find[0]
-                self.lvls.add(level)
-
-                content.append({
-                    "timestamp": find[1],
-                    "level"    : level,
-                    "message"  : find[2]
-                })
-            else:
-                content[-1]["message"] += f"\n{line.strip()}"
-
-        self.parsed = content
-
-        lvls = sorted(self.lvls, key=lambda l: getattr(logging, l))
-        self.selected = {"timestamps": True} | {lvl: True for lvl in lvls}
-        # self.selected = self.lvls
-
-        return content
-
-    def extract(self):
-        """
-        Extracts useful information from the processed logs
-        """
-        stats = SimpleNamespace()
-
-        for i, line in enumerate(self.parsed):
-            message = line["message"]
-
-            if message == "Run ISOFIT initial guess":
-                stats.name = "Presolve"
-
-            if message == "Running ISOFIT with full LUT":
-                stats.name = "Full Solution"
-
-            if message == "Analytical line inference":
-                stats.name = "Analytical Line"
-
-            if (find := re.findall(r"Beginning (\d+) inversions", message)):
-                stats.total = find[0]
-
-            if message == "Inversions completed": # V2
-                line = content[i+1]["message"]
-                find = re.findall(r"(\S+) (\S+)", line.replace(',', ''))
-
-                stats.data = {val: key for key, val in find}
-
-                self.stats.append(stats)
-
-                # Reset the stats object
-                stats = SimpleNamespace()
-
-            if "Analytical line inversions complete" in message or "Inversions complete" in message:
-                find = re.findall(r"(\d+\.\d+s?) (\S+)", message.replace(',', ''))
-
-                stats.data = {val: key for key, val in find}
-
-                self.stats.append(stats)
-
-                # Reset the stats object
-                stats = SimpleNamespace()
-
-    def filter(self, select=0):
-        """
-        Filters the content per the `selected` dict
-
-        Parameters
-        ----------
-        select : str | list[str] | None, default=0
-            Toggles selections in the `selected` attribute. Options:
-            - "all" = Enable all options
-            - None  = Disable all options
-            - str   = Enable only this option
-            - list  = Enable only these options
-            - Anything else, such as the default 0, will do nothing and use the current
-              selected dict
-        """
-        if select == "all":
-            for key in self.selected:
-                self.selected[key] = True
-        if select == None:
-            for key in self.selected:
-                self.selected[key] = False
-        if isinstance(select, str):
-            for key in self.selected:
-                self.selected[key] = False
-            if key in self.selected:
-                self.selected[key] = True
-        if isinstance(select, list):
-            for key in self.selected:
-                self.selected[key] = False
-            for key in select:
-                if key in self.selected:
-                    self.selected[key] = True
-
-        self.filtered = []
-        for c in self.parsed:
-            if self.selected[c["level"]]:
-                self.filtered.append(c)
-
-        return self.filtered
-
-    def build(self):
-        """
-        Builds the filtered contents dict into a list of tuples to be used for writing
-        to the log. Timestamps can be disabled by setting:
-            self.selected["timestamps"] = False
-
-        Returns
-        -------
-        lines : list[tuple[str, str, str]]
-            Returns a list of 3-pair tuples of strings in the form:
-                (timestamp, padded level, log message)
-            Timestamp will be an empty string if it is not enabled
-            The level is right-padded with whitespace to the length of the longest log
-            level (eg. "warning", "debug  ")
-            This will also be saved in self.lines
-        """
-        if not self.filtered:
-            self.filter()
-
-        # The colors dict uses the padded string for easy lookup
-        self.colors = {}
-
-        padding = len(max(self.lvls)) + 1
-
-        lines = []
-        for c in self.filtered:
-            color = self._lvlColors[c["level"]]
-            level = c["level"].ljust(padding)
-
-            self.colors[level] = color
-
-            ts = ''
-            if self.selected['timestamps']:
-                ts = c['timestamp'] + ' '
-
-            lines.append([
-                ts,
-                level,
-                c['message']
-            ])
-
-        self.lines = lines
-
-        return lines
-
-    def toggle(self, level, value=None):
-        """
-        Sets a level's visibility then calls filter and build
-
-        Parameters
-        ----------
-        level : str
-        value : bool, default=None
-        """
-        if level not in self.selected:
-            raise AttributeError(f"Level not available: {level}")
-
-        if value is None:
-            value = not self.selected[level]
-
-        self.selected[level] = value
-
-        self.filter()
-        self.build()
-
-
-class IsofitData:
-    keys = ("rfl", "atm", "lbl", "h2o", "uncert", "config")
-
-    def __init__(self, path, kind=None):
-        self.kind = kind
-        self.data = {}
-
-        self.path = Path(path)
-
-        if not self.path.exists():
-            raise AttributeError(f"Path does not exist: {self.path}")
-
-        self.out = self.path / "output"
-
-        if not self.out.exists():
-            raise AttributeError(f"Output path does not exist: {self.out}")
-
-        rfl = list(self.out.rglob("*_rfl"))
-        if not rfl:
-            raise AttributeError("A reflectance file is not found in the output -- is this an incomplete run?")
-
-        self.name = rfl[0].name[:-4].replace("_subs", "")
-
-        if kind is None:
-            self.subs = IsofitData(path, "_subs_")
-            self.full = IsofitData(path, "_")
-
-    def __getitem__(self, key):
-        args = []
-        if isinstance(key, tuple):
-            key, *args = key
-
-        if key not in self.keys:
-            raise AttributeError(f"Key must be one of: {self.keys}, got: {key!r}")
-
-        if self.kind != "_subs_":
-            if key == "atm":
-                key = "atm_interp"
-
-        return self.load(key, *args)
-
-        # return getattr(self, key, **kwargs)
-
-    def __getattr__(self, key):
-        return self[key]
-
-    def __repr__(self):
-        return f"<{self.__class__.__name__} kind={self.kind}>"
-
-    def load(self, key=None, name=None, **kwargs):
-        if name:
-            return self._load_raster(name=name)
-
-        # Passthrough directly to the full run
-        if self.kind is None:
-            return self.full.load(key=key, **kwargs)
-
-        if key in self.data:
-            return self.data[key]
-
-        if key == "config":
-            return self._load_config(**kwargs)
-
-        return self._load_raster(key=key)
-
-    def _load_config(self, file=None, tpl=False, tmpl=False):
-        """
-        Loads a configuration json
-
-        Parameters
-        ----------
-        file : str, default=None
-            Filename to load from the config directory
-        tpl : bool, default=False
-            Load the modtran config
-        tmpl : bool, default=False
-            Load the template config
-
-        Returns
-        -------
-        dict
-            Loaded JSON dictionary
-        """
-        if not file:
-            kind = self.kind + "isofit"
-            if self.kind == "_subs_":
-                kind = "_h2o"
-                modtran = "_tpl"
-
-            file = self.name + kind
-
-            if tpl:
-                # if kind == "_":
-                #     file += "modtran"
-                file = file.replace("isofit", "modtran")
-                file += "_tpl"
-            file += ".json"
-
-            if tmpl:
-                file += ".tmpl"
-
-        file = self.path / "config" / file
-        if not file.exists():
-            print(f"File does not exist: {file}")
-            return
-
-        print(f"Loading {file}")
-        with open(file, "rb") as f:
-            return json.load(f)
-
-    def _load_raster(self, key=None, name=None):
-        if name:
-            file = self.out / name
-        elif key:
-            file = self.out / (self.name + self.kind + key)
-        else:
-            raise AttributeError("Either the key or filename must be given")
-
-        if not file.exists():
-            print(f"File does not exist: {file}")
-            return
-
-        self.data[key] = xr.open_dataset(file, engine="rasterio", lock=False)
-
-        return self.data[key]
-
-    def rgb(self, r=60, g=40, b=30):
-        """
-        Returns the RGB data of the RFL product
-
-        Parameters
-        ----------
-        r : int, default=60
-            Red band
-        g : int, default=40
-            Green band
-        b : int, default=30
-            Blue band
-
-        Returns
-        -------
-        xr.DataArray
-        """
-        data = self.rfl.band_data
-
-        # Retrieve the RGB subset
-        rgb = data.sel(band=[r, g, b]).transpose('y', 'x', 'band')
-        rgb /= rgb.max(['x', 'y']) # Brightens image
-
-        # Convert to pixel coords for easier plotting
-        rgb['x'] = range(rgb.x.size)
-        rgb['y'] = range(rgb.y.size)
-
-        return rgb
-
-    def getConfigs(self):
-        path = self.path / "config"
-        if self.kind is None:
-            files = path.rglob("*.json*")
-        elif self.kind == "_subs_":
-            files = path.rglob("*_h2o*.json*")
-        else:
-            files = path.rglob("*_[i,m]*.json*")
-        return list(files)
-
-    def getOutputs(self):
-        files = []
-        for file in self.out.glob("*"):
-            if file.suffix:
-                continue
-            if not self.kind:
-                files.append(file)
-            elif self.kind == "_":
-                if "_subs" not in file.name:
-                    files.append(file)
-            elif self.kind == "_subs_":
-                if "_subs" in file.name:
-                    files.append(file)
-        return files
-
-
-class IsofitOutput:
-    _dirs = ("config", "data", "input", "lut_full", "lut_h2o", "output")
-
-    def __init__(self, path, invalid=False):
-        """
-        TODO
-
-        Parameters
-        ----------
-        path : str
-            Path to either an ISOFIT configuration file or an output directory. If a
-            config file, will attempt to detect the output directory from it.
-        invalid : bool, default=False
-            Allow an invalid path. This may be used to initialize an empty object and
-            change it via changePath()
-        """
-        self.dirs = {}
-        self.path = Path(path)
-        self.data = None
-        self._logs = None
-        self.logFile = None
-        self.invalid = invalid
-
-        if self.path.is_file():
-            for parent in self.path.parents:
-                dirs = self.findSubdirs(parent)
-                if any(dirs.values()):
-                    self.path = parent
-                    self.dirs = dirs
-                    self.data = IsofitData(self.path)
-                    break
-            else:
-                self._error("Could not find a valid working directory given the configuration file")
-
-        elif any((dirs := self.findSubdirs(self.path)).values()):
-            self.dirs = dirs
-            self.data = IsofitData(self.path)
-
-        else:
-            self._error("Could not find a valid working directory")
-
-    def __repr__(self):
-        return f"<IsofitOutput: {self.path}>"
-
-    def changePath(self, *args, **kwargs):
-        """
-        Re-initializes the existing object by simply calling __init__. Useful for
-        maintaining a single object that must change working directories
-
-        Parameters
-        ----------
-        *args : list
-            Passthrough arguments
-        **kwargs : dict
-            Passthrough key-word arguments
-        """
-        self.__init__(*args, **kwargs)
-        return self
-
-    def findSubdirs(self, path):
-        return {
-            subdir: (path / subdir).exists()
-            for subdir in self._dirs
-        }
-
-    def makeTree(self):
-        tree = []
-        for _dir, data in IsofitFiles.items():
-            subpath = self.path / _dir
-            children = []
-            if subpath.exists():
-                tree.append({"id": _dir, "desc": data["desc"], "children": children})
-                for name, desc in data["files"].items():
-                    if files := list(subpath.glob(name)):
-                        for file in files:
-                            children.append({"id": file.name, "desc": desc})
-
-        return tree
-
-    def parseLogs(self, file=None):
-        if file:
-            self.logs = IsofitLogs(file)
-        else:
-            if not self.logs:
-                files = list(self.path.rglob("*.log"))
-                if files:
-                    self.logs = IsofitLogs(files[0])
-                else:
-                    print("No log file found")
-                    return
-
-    def setLogFile(self, file=None):
-        """
-        Sets the log file
-
-        Parameters
-        ----------
-        file : str, default=None
-            Filepath to a log file to parse. If None, resets the stored log file and
-            will attempt to automatically find one on the next access of the `logs`
-            attribute
-
-        Raises
-        -------
-        FileNotFoundError
-            If the provided log file does not exist
-        """
-        if file:
-            if not Path(file).exists():
-                return self._error(f"Log file does not exist: {file}")
-        self.logFile = file
-
-    @property
-    def logs(self):
-        if self._logs is None:
-            if self.logFile is None:
-                files = list(self.path.rglob("*.log"))
-                if files:
-                    self.logFile = files[0]
-
-            if self.logFile:
-                self._logs = IsofitLogs(self.logFile)
-            else:
-                self._error("No log file found. Please set one via setLogFile()")
-        return self._logs
-
-    def _error(self, message):
-        if not self.invalid:
-            raise FileNotFoundError(message)
-        print(message)
-
-#%%
-
-class Logs:
     logs = None
 
-    def __init__(self):
+    def __init__(self, parent):
+        """
+        Parameters
+        ----------
+        parent : Tabs
+            Parent tabs object, for back-reference
+        """
+        self.parent = parent
+
         with ui.column().classes("h-screen w-full"):
             with ui.expansion("Settings & Stats", value=True).classes("w-full"):
                 ui.chip(
@@ -779,40 +204,45 @@ class Logs:
         self.lines.clear()
         self.levels.clear()
 
-        try:
-            if isofit and isofit.logs:
-                self.logs = isofit.logs
-        except:
-            self.logs = None
-            with self.lines:
-                ui.chip(
-                    "No log file found. If it is outside of the directory, place it somewhere inside with the extension .log",
-                    icon  = "error",
-                    color = "red"
-                ).classes("w-full")
+        if isofit:
+            self.logs = isofit.logs
 
-        if self.logs:
+        try:
+            self.logs.parse()
             self.logs.filter(None)
             self.logs.build()
 
             self.populateLogs()
             self.populateLevels()
+        except Exception as e:
+            print(f"Failed to load logs: {e}")
+            self.logs = None
+            with self.lines:
+                ui.chip(
+                    "No log file found or could not parse. If it is outside of the directory, place it somewhere inside with the extension .log",
+                    icon  = "error",
+                    color = "red"
+                ).classes("w-full")
 
-    def toggleLevel(self, event):
+    def toggle(self, event):
         self.logs.toggle(event.sender.text, event.value)
+        self.logs.build()
         self.populateLogs()
 
     def populateLevels(self):
         self.levels.clear()
         with self.levels:
+            for key, value in self.logs.format.items():
+                ui.switch(key, value=value, on_change=self.toggle)
             for level, value in self.logs.selected.items():
-                ui.switch(level, value=value, on_change=self.toggleLevel)
+                ui.switch(level, value=value, on_change=self.toggle)
 
     def populateLogs(self):
         self.lines.clear()
         with self.lines:
             for (ts, lvl, msg) in self.logs.lines:
-                color = self.logs.colors[lvl]
+                # color = self.logs.colors[lvl]
+                color = self.colors.get(lvl.strip(), "white")
                 with ui.row():
                     ui.label(ts).classes("text-orange")
                     ui.label(lvl).classes(f"text-{color}")
@@ -824,7 +254,15 @@ class Spectra:
     data = None
     opts = None
 
-    def __init__(self):
+    def __init__(self, parent):
+        """
+        Parameters
+        ----------
+        parent : Tabs
+            Parent tabs object, for back-reference
+        """
+        self.parent = parent
+
         with ui.splitter(value=30).classes("w-full h-full") as splitter:
             with splitter.before:
                 with ui.card().classes("w-full border"):
@@ -855,20 +293,23 @@ class Spectra:
                 self.spectras = ui.scroll_area().classes("h-full w-full border")
 
     async def reset(self, isofit=None):
-        if isofit and isofit.data:
-            self.data = isofit.data
+        # if isofit and isofit.data:
+        #     self.data = isofit.data
+        if isofit:
+            self.isofit = isofit
 
-        if self.data:
+        if self.isofit:
             self.spectras.clear()
 
             # opts = [file.name for file in self.data.getOutputs()]
-            opts = [f"{self.data.name}_rfl"]
+            # opts = [f"{self.data.name}_rfl"]
+            opts = [f"{self.isofit.output.name}_rfl"]
 
             if opts != self.opts:
                 self.opts = opts
 
                 # Always default to the full RFL data
-                self.select.set_options(self.opts, value=f"{self.data.name}_rfl")
+                self.select.set_options(opts, value=opts[0])
             else:
                 self.plotImage(self.rgb)
 
@@ -879,7 +320,9 @@ class Spectra:
         # if "_subs" in file:
         #     self.rgb = await run.io_bound(self.data.subs.rgb)
         # else:
-        self.rgb = await run.io_bound(self.data.full.rgb)
+        # self.rgb = await run.io_bound(self.data.full.rgb)
+        self.rgb = await run.io_bound(self.isofit.output.rgb)
+        self.rfl = await run.io_bound(self.isofit.output.load, path=event.value)
 
         self.plotImage(self.rgb)
 
@@ -961,11 +404,13 @@ class Spectra:
 
     def plotSpectra(self, i, x, y):
         with self.spectras:
-            spectra = self.data.rfl.isel(x=x, y=y)
-            spectra = spectra.rename(band_data='Reflectance', wavelength='Wavelength')
+            spectra = self.rfl.isel(x=x, y=y)
+            # spectra = spectra.rename(band_data='Reflectance', wavelength='Wavelength')
+            spectra.name = "Reflectance"
+            spectra = spectra.rename(wavelength='Wavelength')
             spectra = spectra.where(spectra != spectra.min())
-            data = spectra.Reflectance
-            df = data.to_dataframe()
+            # data = spectra.Reflectance
+            df = spectra.to_dataframe()
 
             # Remove min values
 
@@ -995,7 +440,15 @@ class Spectra:
 class Config:
     data = None
 
-    def __init__(self):
+    def __init__(self, parent):
+        """
+        Parameters
+        ----------
+        parent : Tabs
+            Parent tabs object, for back-reference
+        """
+        self.parent = parent
+
         with ui.row():
             self.select = ui.select([], label="Select a Configuration", on_change=self.loadConfig)
             ui.switch("Editable", value=False, on_change=self.readOnly).classes("h-full")
@@ -1003,21 +456,20 @@ class Config:
         self.editor = ui.json_editor({'content': {'json': {}}, 'readOnly': True}).classes('w-full jse-theme-dark')
 
     async def reset(self, isofit=None):
-        if isofit and isofit.data:
-            self.data = isofit.data
-
-        if self.data:
-            configs = [file.name for file in self.data.getConfigs()]
+        if isofit:
+            self.isofit = isofit
+            configs = isofit.find("config/.json", all=True)
             self.select.set_options(configs, value=configs[0])
 
     def loadConfig(self, event):
-        data = self.data.load("config", file=event.value)
+        data = self.isofit.load(path=event.value)
         self.editor.run_editor_method('updateProps', {'content': {'json': data}})
 
     def readOnly(self, event):
         self.editor.run_editor_method('updateProps', {'readOnly': not event.value})
 
 
+#%%
 
 def blankFig(fkw={}, lkw={}):
     lkw = {
@@ -1032,87 +484,483 @@ def blankFig(fkw={}, lkw={}):
 
     return fig
 
+#%%
+
+def multiplot(figs=[], height=300):
+    # Ensure at least one figure is set
+    if not figs:
+        figs = [go.Figure()]
+
+    fig = go.Figure()
+    fig.set_subplots(
+        rows = len(figs),
+        cols = 1,
+        shared_xaxes = 'all',
+        shared_yaxes = 'all',
+        vertical_spacing = 0.01
+    )
+    fig.update_layout(**{
+        "margin": dict(l=0, r=20, t=0, b=0),
+        "paper_bgcolor": "rgba(0, 0, 0, 0)",
+        "template": "plotly_dark",
+        "height": height*len(figs),
+    })
+
+    for i, plot in enumerate(figs):
+        print(type(plot))
+        for trace in plot.data:
+            fig.add_trace(trace, row=i+1, col=1)
+
+    return fig
+
+#%%
+
+class MultiPlotLUT:
+    """
+    Handles the construction and management of a single LUT plotting card in the LUTs
+    tab
+    """
+    isofit = None
+
+    def b__init__(self, files=None, cache=None):
+        """
+        Parameters
+        ----------
+        files : list, default=None
+            Shared NiceGUI observables for the files options, otherwise will be an
+            independent list
+        cache : dict, default=None
+            Shared cache dict if provided, otherwise creates one for this object
+        """
+        if files is None:
+            files = observables.ObservableList([], on_change=self.setOptions)
+        self.files = files
+
+        if cache is None:
+            cache = {}
+        self.cache = cache
+
+        self.selects = []
+        self.plots = [self.blank]
+        self.luts = [None]
+
+        with ui.card().classes("w-full border"):
+            with ui.column().classes("w-full") as self.column:
+                with ui.row().classes("w-full"):
+                    select = ui.select(
+                        label = "LUT File",
+                        options = self.files,
+                        multiple = False, # TODO?
+                        new_value_mode = "add-unique",
+                        on_change = lambda e: self.changeFile(e.value)
+                    ).classes("w-1/4").props('use-chips')
+                    self.selects.append(select)
+
+                    self.quants = ui.select(
+                        label = "Select a LUT quantity",
+                        options = [],
+                        on_change = lambda e: self.changeQuant(e.value)
+                    ).classes("w-1/4")
+                    self.quants.disable()
+
+                    self.dims = ui.select(
+                        label = "Select a LUT dimension",
+                        options = [],
+                        on_change = lambda e: self.changeDim(e.value)
+                    ).classes("w-1/4")
+                    self.dims.disable()
+
+                    ui.button("Add Subplot",
+                        on_click = lambda: self.createSubplot()
+                    ).props("outline")
+
+                self.ui = ui.plotly(multiplot()).classes("w-full")
+
+    def __init__(self, files=None, cache=None):
+        """
+        Parameters
+        ----------
+        files : list, default=None
+            Shared NiceGUI observables for the files options, otherwise will be an
+            independent list
+        cache : dict, default=None
+            Shared cache dict if provided, otherwise creates one for this object
+        """
+        if files is None:
+            files = observables.ObservableList([], on_change=self.setOptions)
+        self.files = files
+
+        if cache is None:
+            cache = {}
+        self.cache = cache
+
+        self.main = self.new
+        self.plots = [self.main]
+
+        with ui.card().classes("w-full border"):
+            with ui.column().classes("w-full") as self.column:
+                with ui.row().classes("w-full"):
+                    self.main["select"] = ui.select(
+                        label = "LUT File",
+                        options = self.files,
+                        multiple = False, # TODO?
+                        new_value_mode = "add-unique",
+                        on_change = lambda e: self.changeFile(e.value)
+                    ).classes("w-1/4").props('use-chips')
+                    # self.selects.append(select)
+
+                    self.quants = ui.select(
+                        label = "Select a LUT quantity",
+                        options = [],
+                        on_change = lambda e: self.changeQuant(e.value)
+                    ).classes("w-1/4")
+                    self.quants.disable()
+
+                    self.dims = ui.select(
+                        label = "Select a LUT dimension",
+                        options = [],
+                        on_change = lambda e: self.changeDim(e.value)
+                    ).classes("w-1/4")
+                    self.dims.disable()
+
+                    ui.button("Add Subplot",
+                        on_click = lambda: self.createSubplot()
+                    ).props("outline")
+
+                self.ui = ui.plotly(multiplot()).classes("w-full")
+
+    def _setOptions(self, event=None):
+        print("local setOptions")
+        for select in self.selects:
+            select.set_options(self.files)
+
+    def setOptions(self, event=None):
+        print("local setOptions")
+        for plot in self.plots:
+            plot["select"].set_options(self.files)
+
+    @property
+    def new(self):
+        return {
+            "plot": self.blank,
+            "lut": None,
+            "select": None
+        }
+
+    def _createSubplot(self):
+        i = len(self.plots)
+        self.plots.append(self.blank)
+        self.luts.append(None)
+
+        with self.column:
+            with ui.row().classes("w-full"):
+                select = ui.select(
+                    label = f"LUT File for Plot {i+1}",
+                    options = self.files,
+                    new_value_mode = "add-unique",
+                    on_change = lambda e: self.updateSubplot(i, file=e.value)
+                ).classes("w-4/5")
+                self.selects.append(select)
+
+                ui.button("Remove",
+                    on_click = lambda: self.deleteSubplot(i)
+                ).props("outline")
+
+        # Shift to bottom of the card
+        self.ui.move(target_index=-1)
+
+        self.updateUI()
+
+    def createSubplot(self):
+        plot = self.new
+        self.plots.append(plot)
+
+        with self.column:
+            with ui.row().classes("w-full"):
+                plot["select"] = ui.select(
+                    label = f"LUT File for Plot {len(self.plots)}",
+                    options = self.files,
+                    new_value_mode = "add-unique",
+                    on_change = lambda e: self.updateSubplot(plot, file=e.value)
+                ).classes("w-4/5")
+
+                ui.button("Remove",
+                    on_click = lambda: self.deleteSubplot(plot)
+                ).props("outline")
+
+        # Shift to bottom of the card
+        self.ui.move(target_index=-1)
+
+        # Update the figure with a blank
+        self.updateUI()
+
+    def deleteSubplot(self, plot):
+        i = self.plots.index(plot)
+        self.column.remove(i)
+        self.plots.pop(i)
+        self.updateUI()
+
+        # Update labels for consistency
+        for i, plot in enumerate(self.plots[1:]):
+            plot["select"].props(f'label="LUT File for Plot {i+2}"')
+
+    def updateSubplot(self, plot, file):
+        if (lut := self.load(file)) is None:
+            return
+
+        plot["lut"] = lut
+        plot["plot"] = self.plot(
+            lut   = plot["lut"],
+            quant = self.quant,
+            dim   = self.dim
+        )
+        self.updateUI()
+
+    def _updateSubplot(self, i, file):
+        if (lut := self.load(file)) is None:
+            return
+
+        self.luts[i] = lut
+        self.plots[i] = self.plot(
+            lut   = self.luts[i],
+            quant = self.quant,
+            dim   = self.dim
+        )
+        self.updateUI()
+
+    def load(self, file):
+        if file not in self.cache:
+            if Path(file).exists():
+                print(f"Loading given LUT: {file}")
+                try:
+                    self.cache[file] = luts.load(file).unstack()
+                except Exception as e:
+                    print(f"Failed to load, reason: {e}")
+            else:
+                print(f"Loading LUT from WD: {file}")
+                try:
+                    self.cache[file] = self.isofit.load(path=file).unstack()
+                except Exception as e:
+                    print(f"Failed to load, reason: {e}")
+
+        return self.cache.get(file)
+
+    def update(self, isofit=None):
+        if isofit:
+            self.isofit = isofit
+
+    def _updateUI(self):
+        """
+        Updates the GUI with a newly constructed multi-plot figure
+        """
+        fig = multiplot(self.plots)
+        self.ui.update_figure(fig)
+
+    def updateUI(self):
+        """
+        Updates the GUI with a newly constructed multi-plot figure
+        """
+        plots = [plot["plot"] for plot in self.plots]
+        fig = multiplot(plots)
+        self.ui.update_figure(fig)
+
+    def changeFile(self, file):
+        if (lut := self.load(file)) is None:
+            return
+
+        self.main["lut"] = lut
+        # self.luts[0] = lut
+
+        plottable = set(lut) - set(lut.drop_dims("wl"))
+        if plottable:
+            self.quants.set_options(list(plottable))
+            self.quants.enable()
+
+        self.quants.set_value(None)
+
+    def changeQuant(self, quant=None):
+        print("changeQuantities", quant)
+        self.quant = quant
+
+        # lut = self.luts[0]
+        lut = self.main["lut"]
+        dims = set(lut[quant].dims) - {"wl",}
+
+        self.dims.set_options(list(dims))
+        if dims:
+            self.dims.enable()
+        else:
+            self.dims.disable()
+            self.changeDim()
+
+    def changeDim(self, dim=None):
+        print("changeDimensions", dim)
+        self.dim = dim
+
+        # Update all plots
+        for plot in self.plots:
+            plot["plot"] = self.plot(
+                lut   = plot["lut"],
+                quant = self.quant,
+                dim   = self.dim
+            )
+
+        self.updateUI()
+
+    def plot(self, lut, quant, dim):
+        try:
+            data = lut[quant]
+            dims = set(data.coords) - {"wl", dim}
+            mean = data.mean(dims, skipna=True)
+            mean = mean.rename(wl="Wavelength")
+
+            # Split each value of the dim into its own variable
+            mean = mean.to_dataset(dim)
+            df = mean.to_dataframe()
+
+            return px.line(df,
+                template = "plotly_dark",
+                labels = {"variable": dim}
+            )
+        except Exception as e:
+            print(f"Failed to plot {quant}[{dim}], reason: {e}")
+            print(lut)
+            return self.blank
+
+    @property
+    @staticmethod
+    def blank(self):
+        """
+        Creates a blank plotly figure with an empty scatter trace so that it renders
+        the plot in the GUI. Without the scatter, the plot will be invisible
+
+        Returns
+        -------
+        go.Figure
+            Blank plotly figure
+        """
+        return go.Figure(go.Scatter())
+
+from nicegui import observables
 
 class LUTs:
-    def __init__(self):
+    blank = property(lambda self: go.Figure(go.Scatter()))
+
+    def __init__(self, parent):
+        """
+        Parameters
+        ----------
+        parent : Tabs
+            Parent tabs object, for back-reference
+        """
+        self.parent = parent
+
         self.cards = []
         self.data = {}
+        self.luts = {}
+        self.cache = {}
 
         self.dropdowns = []
         self.files = []
-        self.scroll = ui.scroll_area().classes("h-full w-full")
+        self.files = observables.ObservableList([], on_change=self.setOptions)
+        with ui.scroll_area().classes("h-full w-full") as self.scroll:
+            self.addCardBtn = ui.button("Add New Independent Plot", on_click=self.createCard).classes("w-full").props("outline")
+
         self.createCard()
-        self.createCard()
-        self.createCard()
+
+    def setOptions(self, event):
+        print("global setOptions")
+        # for card in self.cards:
+        #     card["fileOpts"].set_options(self.files)
+        for card in self.cards:
+            card.setOptions()
 
     async def reset(self, isofit=None):
-        if isofit and isofit.wd:
-            self.wd = isofit.wd
+        """
+        Resets the tab with a new IsofitWD object
 
+        Parameters
+        ----------
+        isofit : IsofitWD, default=None
+            Working Isofit Directory object
+        """
         self.files.clear()
-        if self.wd:
-            self.luts = {name: obj for name, obj in self.wd.dirs.items() if isinstance(obj, self.wd.classes["lut"])}
+        if isofit is not None:
+            self.isofit = isofit
+
+            self.luts = {name: obj for name, obj in isofit.dirs.items() if isinstance(obj, isofit.classes["lut"])}
             for name, lut in self.luts.items():
                 self.files += [
                     f"{name}/{file}"
                     for file in lut.find("lut", all=True)
                 ]
             for card in self.cards:
-                card["fileOpts"].set_options(self.files)
-            # for card in self.scroll:
-            #     print(card)
-            #     print(dir(card))
-                # card[0][0][0].set_options(self.files)
+                card.isofit = isofit
+            #     card["fileOpts"].set_options(self.files)
+
+    def load(self, file):
+        if file not in self.luts:
+            if Path(file).exists():
+                print(f"Loading given LUT: {file}")
+                try:
+                    self.luts[file] = luts.load(file).unstack()
+                except Exception as e:
+                    print(f"Failed to load, reason: {e}")
+            else:
+                print(f"Loading LUT from WD: {file}")
+                try:
+                    self.luts[file] = self.isofit.load(path=file).unstack()
+                except Exception as e:
+                    print(f"Failed to load, reason: {e}")
+
+        return self.luts.get(file)
 
     def changeFile(self, value, card):
-        new = set([value]) # TODO: When changing back to multiple=True, remove []
+        # new = set([value]) # TODO: When changing back to multiple=True, remove []
         print("changeFile", value)
-        # print(dir(event.sender))
-        #
-        # card["data"] = {}
-        sel = card.setdefault("selected", set())
+        if (lut := self.load(value)) is None:
+            return
 
-        add = new - sel
-        for file in add:
-            if file not in self.data:
-                if Path(file).exists():
-                    print(f"Loading given LUT: {file}")
-                    try:
-                        self.data[file] = luts.load(file).unstack()
-                    except Exception as e:
-                        print(f"Failed to load, reason: {e}")
-                else:
-                    print(f"Loading LUT from WD: {file}")
-                    try:
-                        self.data[file] = self.wd.load(path=file).unstack()
-                    except Exception as e:
-                        print(f"Failed to load, reason: {e}")
+        card["lut"] = lut
 
-        remove = sel - new
-        # TODO
-
-        for file in new:
-            if file in self.data:
-                lut = self.data[file]
-
-                card.setdefault("luts", {})[file] = lut
-
-                plottable = set(lut) - set(lut.drop_dims("wl"))
-                card["quantOpts"].set_options(list(plottable))
-                # card["quantOpts"].visible = True
-                card['quantOpts'].enable()
+        plottable = set(lut) - set(lut.drop_dims("wl"))
+        if plottable:
+            card["quantOpts"].set_options(list(plottable))
+            card['quantOpts'].enable()
 
         card["quantOpts"].set_value(None)
 
+        # card["data"] = {}
+        # sel = card.setdefault("selected", set())
+
+        # add = new - sel
+        # for file in add:
+        #     self.load(file)
+
+        # remove = sel - new
+        # TODO
+
+        # for file in new:
+        #     if file in self.data:
+        #         lut = self.data[file]
+        #
+        #         card.setdefault("luts", {})[file] = lut
+        #
+        #         plottable = set(lut) - set(lut.drop_dims("wl"))
+        #         card["quantOpts"].set_options(list(plottable))
+        #         # card["quantOpts"].visible = True
+        #         card['quantOpts'].enable()
+        # card.setdefault("luts", {})[file] = lut
 
     def changeQuantities(self, value, card):
         print("changeQuantities", value)
         card["quant"] = value
 
-        dims = []
-        for file, lut in card["luts"].items():
-            if value in lut:
-                dims = set(lut[value].dims) - {"wl",}
+        # dims = []
+        # for file, lut in card["luts"].items():
+        #     if value in lut:
+        #         dims = set(lut[value].dims) - {"wl",}
+        dims = set(card["lut"][value].dims) - {"wl",}
 
         card["dimOpts"].set_options(list(dims))
         if dims:
@@ -1124,41 +972,114 @@ class LUTs:
 
     def changeDimensions(self, value, card):
         print("changeDimensions", value)
+        card["dim"] = value
 
-        if card["quant"]:
-            for file, lut in card["luts"].items():
-                data = lut[card["quant"]]
+        card["plots"][0] = self.plot(
+            lut = card["lut"],
+            quant = card["quant"],
+            dim = card["dim"]
+        )
 
-            # Dimensions to take a mean on (the not-selected dims)
-            dims = set(data.coords) - {"wl", value}
+        # if card["quant"]:
+        #     card["plots"][0] = self.plot(
+        #         lut = card["lut"],
+        #         quant = card["quant"],
+        #         dim = card["dim"]
+        #     )
+        # else:
+        #     card["plots"][0] = self.blank
+
+        self.updatePlot(card)
+
+        # Update subplots as well
+        # for
+
+    def plot(self, lut, quant, dim):
+        try:
+            data = lut[quant]
+            dims = set(data.coords) - {"wl", dim}
             mean = data.mean(dims, skipna=True)
             mean = mean.rename(wl="Wavelength")
 
             # Split each value of the dim into its own variable
-            mean = mean.to_dataset(value)
+            mean = mean.to_dataset(dim)
             df = mean.to_dataframe()
 
-            fig = px.line(df,
+            return px.line(df,
                 template = "plotly_dark",
-                labels = {"variable": value}
+                labels = {"variable": dim}
             )
-        else:
-            fig = blankFig()
+        except Exception as e:
+            print(f"Failed to plot {quant}[{dim}], reason: {e}")
+            print(lut)
+            return self.blank
 
+    def updateCardPlot(self, card, i, file=None):
+        if file:
+            if (lut := self.load(file)) is None:
+                return
+
+            card["plots"][i] = self.plot(
+                lut = lut,
+                quant = card["quant"],
+                dim = card["dim"]
+            )
+            self.updatePlot(card)
+
+    def updatePlot(self, card):
+        fig = multiplot(card["plots"])
         card["plot"].update_figure(fig)
 
-    def createCard(self):
+    def createCardPlot(self, card):
+        plots = card.setdefault("plots", [])
+
+        i = len(plots)
+        plots.append(self.blank)
+        card["plot"].update_figure(multiplot(plots))
+
+        with card["column"]:
+            # self.addCardBtn.move(target_index=-1)
+            ui.select(
+                label = f"LUT File for Plot {i+1}",
+                options = self.files,
+                new_value_mode = "add-unique",
+                on_change = lambda e: self.updateCardPlot(card, i, file=e.value)
+            ).classes("w-full")
+
+        # Shift to bottom of the card
+        card["plot"].move(target_index=-1)
+
+            # with ui.row().classes("w-full"):
+            #     ui.select(
+            #         label = "LUT File",
+            #         options = self.files,
+            #         multiple = False, # TODO
+            #         new_value_mode = "add-unique",
+            #         on_change = lambda e: self.updateCardPlot(card, i, file=e.value)
+            #     ).classes("w-full")
+
+            # fig = blankFig(height=350)
+            # plot = ui.plotly(fig).classes('w-full')
+            # plots.append(plot)
+
+            # multi = make_subplots(rows=2, cols=1, shared_xaxes=True, shared_yaxes=True)
+            # for trace in fig.data:
+            #     multi.add_trace(trace, row=1, col=1)
+            # for trace in fig.data:
+            #     multi.add_trace(trace, row=2, col=1)
+            # multi
+
+    def _createCard(self):
         self.cards.append({})
         card = self.cards[-1]
 
         with self.scroll:
             with ui.card().classes("w-full border"):
-
-                with ui.column().classes("w-full"):
+                with ui.column().classes("w-full") as card["column"]:
                     with ui.row().classes("w-full"):
                         card['fileOpts'] = ui.select(
-                            label = "LUT Files",
-                            options = [],
+                            label = "LUT File",
+                            options = self.files,
                             multiple = False, # TODO
                             new_value_mode = "add-unique",
                             on_change = lambda e: self.changeFile(e.value, card)
@@ -1182,17 +1103,267 @@ class LUTs:
 
                         # ui.button(icon="restart_alt").props('outline round').classes('shadow-lg')
                         # ui.button(icon="close").props('outline round').classes('shadow-lg')
+                        ui.button("Add Subplot",
+                            on_click = lambda: self.createCardPlot(card)
+                        ).props("outline")
 
-                    fig = blankFig(lkw={"height": 350})
-                    card['plot'] = ui.plotly(fig).classes('w-full')
+                    # fig = blankFig(lkw={"height": 350})
+                    fig = multiplot()
+                    card["plot"] = ui.plotly(fig).classes("w-full")
+                    card["plots"] = [self.blank]
+                    # card["plot"].on("plotly_relayout", lambda e: self.relayout(card, e))
+
+        self.addCardBtn.move(target_index=-1)
+
+    def createCard(self):
+        # self.cards.append({})
+        # card = self.cards[-1]
+
+        with self.scroll:
+            card = MultiPlotLUT(files=self.files, cache=self.cache)
+            self.cards.append(card)
+
+        self.addCardBtn.move(target_index=-1)
+
+    def relayout(self, card, event):
+        plots = card.get("plots", [])
+        # for i in range(len(plots)):
+        #     self.updateCardPlot(card, i)
+        plot = card["plot"]
+        fig = plot.figure
+        # print(fig.layout.xaxis.range)
+        # print(fig.layout.yaxis.range)
+
+
+def toNiceGUITree(tree, *, nodes=None):
+    """
+    Recursively converts an IsofitWD tree (with info) into a NiceGUI-compatible data
+    structure for the tree component
+
+    Parameters
+    ----------
+    tree : dict
+        Tree object created by IsofitWD.getTree(info=True)
+    nodes : list, default=None
+        Converted nodes for the tree component, this likely should be left as the
+        default
+
+    Returns
+    -------
+    nodes : list
+        Converted nodes for the tree component
+    """
+    if nodes is None:
+        nodes = [{"id": "root", "desc": None, "children": []}]
+        toNiceGUITree(tree, nodes=nodes[-1]["children"])
+    else:
+        for info, path in tree.items():
+            if isinstance(path, dict):
+                nodes.append({"id": info.name, "desc": info.info, "children": []})
+                toNiceGUITree(path, nodes=nodes[-1]["children"])
+            else:
+                for file in path:
+                    nodes.append({"id": file.name, "desc": file.info})
+    return nodes
+
+
+class EnhancedTree(ui.tree):
+    @property
+    def branches(self):
+        """
+        Returns branch nodes, no leaves
+
+        Yields
+        ------
+        branch : dict
+            A branch node
+        """
+        for branch in self.props["nodes"]:
+            if "children" in branch:
+                yield branch
+
+    def getPath(self, id, *, branch=None):
+        """
+        Recursively discover the string path to a given node ID
+
+        Parameters
+        ----------
+        id : str
+            ID of the node to find
+        branch : dict
+            Branch of the tree being worked on
+
+        Returns
+        -------
+        str
+            String path, eg. "configs/topoflux/config.json"
+        """
+        if branch is None:
+            for branch in self.branches:
+                if path := self.getPath(id, branch=branch):
+                    return path
+
+        for node in branch["children"]:
+            if node["id"] == id:
+                return id
+            elif "children" in node:
+                if path := self.getPath(id, branch=node):
+                    return f"{node['id']}/{path}"
+
+    def findNode(self, id, *, branch=None):
+        """
+        Find the source node for a given ID
+
+        Parameters
+        ----------
+        id : str
+            ID of the node to find
+        branch : dict
+            Branch of the tree being worked on
+
+        Returns
+        -------
+        str
+            String path, eg. "configs/topoflux/config.json"
+        """
+        if branch is None:
+            for branch in self.branches:
+                if node := self.findNode(id, branch=branch):
+                    return node
+
+        for node in branch["children"]:
+            if node["id"] == id:
+                return node
+            elif "children" in node:
+                node = self.findNode(id, branch=node)
+                if node:
+                    return node
+
+    def findSiblings(self, id, *, branch=None):
+        """
+        Finds the IDs of the sibling nodes in the tree
+
+        Parameters
+        ----------
+        id : str
+            ID of the node to find
+        branch : dict
+            Branch of the tree being worked on
+
+        Returns
+        -------
+        str
+            String path, eg. "configs/topoflux/config.json"
+        """
+        if branch is None:
+            for branch in self.branches:
+                if siblings := self.findSiblings(id, branch=branch):
+                    return siblings
+
+        # Get the sibling directories of the source node
+        nodes = branch["children"]
+        siblings = [node["id"] for node in nodes if "children" in node]
+
+        if id in siblings:
+            return siblings
+
+        # Try to find it in some child
+        for node in nodes:
+            if "children" in node:
+                if siblings := self.findSiblings(id, branch=node):
+                    return siblings
 
 
 class Setup:
-    def __init__(self):
-        ...
+    def __init__(self, parent):
+        """
+        Parameters
+        ----------
+        parent : Tabs
+            Parent tabs object, for back-reference
+        """
+        self.parent = parent
+
+        if WORKING_DIRS:
+            setWD = lambda e: self.directory.set_value(WORKING_DIRS[e.sender.text])
+            with ui.row():
+                for name, path in WORKING_DIRS.items():
+                    if not Path(path).exists():
+                        print(f"Path not found: {path}")
+                        continue
+                    ui.button(name, on_click=setWD)
+
+        self.directory = ui.input("Working Directory or Configuration JSON",
+            validation = self.setIsofit,
+        ).classes("w-full")
+
+        self.directoryTree = ui.scroll_area().classes("w-full h-full")
 
     async def reset(self, isofit=None):
         ...
+
+    def setIsofit(self, value):
+        self.directoryTree.clear()
+
+        # Try to parse the input path
+        # try:
+        #     isofit = IsofitOutput(value)
+        #     self.parent.isofit = isofit
+        #     # self.isofit.changePath(value)
+        # except Exception as e:
+        #     # Output to UI the error
+        #     self.parent.toggleTabs(all=False)
+        #     return str(e)
+
+        isofit = IsofitWD(value)
+        self.parent.isofit = isofit
+        # if not self.isofit.dirs:
+        #     return "Could not parse as a valid ISOFIT output directory"
+
+        self.parent.toggleTabs(all=True)
+
+        # Set the output directory tree
+        with self.directoryTree:
+            data = isofit.getTree(info=True)
+            data = toNiceGUITree(data)
+
+            ui.label("Click on an output file below to jump to an interactive component for that file [Work in Progress]")
+            # ui.label("Detected paths:")
+
+            self.tree = EnhancedTree(data, on_select=lambda e: self.navToFile(e)).classes("border h-full w-full")
+            self.tree.expand(["root"])
+            self.tree.add_slot('default-header', '''
+                <span :props="props">{{ props.node.id }}</strong></span>
+            ''')
+            self.tree.add_slot('default-body', '''
+                <span :props="props">{{ props.node.desc }}</span>
+            ''')
+
+    def navToFile(self, event):
+        """
+        TODO
+
+        Parameters
+        ----------
+        event
+        """
+        name = event.value
+
+        # Find the source node clicked
+        node = self.tree.findNode(name)
+
+        if "children" in node:
+            # siblings = findSiblings(root)
+            siblings = self.tree.findSiblings(name)
+
+            self.tree.collapse(siblings)
+            self.tree.expand([name])
+        else:
+            # Get the string path to the node
+            path = self.tree.getPath(name)
+
+            print(path)
+
 
 #%%
 
@@ -1238,10 +1409,7 @@ class Tabs:
                         for name, btn in self.btns.items():
                             with ui.tab_panel(btn) as self.pnls[name]:
                                 # Initialize the objects
-                                if name == "setup":
-                                    self[name]()
-                                else:
-                                    self.tabs[name] = self.tabs[name]()
+                                self.tabs[name] = self.tabs[name](self)
 
         self.toggleTabs()
 
@@ -1258,9 +1426,6 @@ class Tabs:
     def resetTabs(self):
         for tab in self.tabs:
             self.reset[tab] = True
-
-    def __getitem__(self, key):
-        return getattr(self, key)
 
     def toggleTabs(self, all=None):
         """
@@ -1284,116 +1449,6 @@ class Tabs:
                 tab.disable()
                 tab.classes(add="disabled")
 
-    def navToFile(self, name):
-        nodes = self.tree.props['nodes']
-        headers = [h['id'] for h in nodes]
-
-        if name in headers:
-            self.tree.collapse()
-            self.tree.expand([name])
-            # if name in self.tree.props.get("expanded", []):
-            #     self.tree.collapse([name])
-            # else:
-            #     self.tree.expand([name])
-        else:
-            for node in nodes:
-                for child in node['children']:
-                    if child['id'] == name:
-                        print(node['id'], name)
-
-    def setIsofit(self, value):
-        self.directoryTree.clear()
-
-        # Try to parse the input path
-        try:
-            self.isofit = IsofitOutput(value)
-            # self.isofit.changePath(value)
-        except Exception as e:
-            # Output to UI the error
-            self.toggleTabs(False)
-            return str(e)
-
-        self.isofit.wd = IsofitWD(value)
-        # if not self.isofit.dirs:
-        #     return "Could not parse as a valid ISOFIT output directory"
-
-        self.toggleTabs(True)
-        # self.resetTabs()
-
-        # Set the output directory tree
-        with self.directoryTree:
-            data = self.isofit.makeTree()
-
-            ui.label("Click on an output file below to jump to an interactive component for that file [Work in Progress]")
-            # ui.label("Detected paths:")
-
-            self.tree = ui.tree(data, on_select=lambda e: self.navToFile(e.value)).classes("border h-full w-full")
-            self.tree.add_slot('default-header', '''
-                <span :props="props">{{ props.node.id }}</strong></span>
-            ''')
-            self.tree.add_slot('default-body', '''
-                <span :props="props">{{ props.node.desc }}</span>
-            ''')
-
-    def setup(self):
-        panel = self.pnls["setup"]
-        # panel.clear()
-        with panel:
-            if WORKING_DIRS:
-                setWD = lambda e: self.directory.set_value(WORKING_DIRS[e.sender.text])
-                with ui.row():
-                    for name, path in WORKING_DIRS.items():
-                        if not Path(path).exists():
-                            print(f"Path not found: {path}")
-                            continue
-                        ui.button(name, on_click=setWD)
-
-            self.directory = ui.input("Working Directory or Configuration JSON",
-                validation = self.setIsofit,
-            ).classes("w-full")
-
-            self.directoryTree = ui.column().classes("w-full h-full")
-
-    def config(self):
-        def loadConfig(event):
-            data = self.isofit.data.load("config", file=event.value)
-            editor.run_editor_method('updateProps', {'content': {'json': data}})
-
-        def readOnly(event):
-            editor.run_editor_method('updateProps', {'readOnly': not event.value})
-
-        panel = self.pnls["config"]
-        panel.clear()
-
-        if self.isofit and self.isofit.data is not None:
-            configs = [c.name for c in isofit.data.getConfigs()]
-
-            with panel:
-                with ui.row():
-                    ui.select(configs, value=configs[0], label="Select a Configuration", on_change=loadConfig)
-                    ui.switch("Editable", value=False, on_change=readonly)
-
-                # data = self.isofit.data.load("config", file=configs[0])
-                data = {}
-                editor = ui.json_editor({'content': {'json': data}, 'readOnly': True}).classes('w-full jse-theme-dark')
-                # editor.run_editor_method('updateProps', {'readOnly': True})
-
-    def logs(self):
-        panel = self.pnls["logs"]
-        # panel.clear()
-        with panel:
-            self.Logs = Logs()
-
-    def spectra(self):
-        panel = self.pnls["spectra"]
-        panel.clear()
-        with panel:
-            self.Spectra = Spectra()
-
-    def luts(self):
-        with self.pnls["luts"]:
-            self.LUTs = LUTs()
-
 
 GUI = Tabs()
 
@@ -1402,19 +1457,3 @@ if __name__ in {"__main__", "__mp_main__"}:
     ui.run()
 
 #%%
-
-# wd = IsofitWD("/Users/jamesmo/projects/isofit/research/jemit")
-
-# wd.lut_full.files
-
-def toNiceGUITree(tree, *, nodes=[], children=None):
-    for dpath, fpath in tree.items():
-        if isinstance(fpath, dict):
-            nodes.append({"id": dpath, "desc": None, "children": []})
-            toNiceGUITree(fpath, nodes=nodes[-1]["children"])
-        else:
-            for file in fpath:
-                nodes.append({"id": file, "desc": None})
-    return nodes
-
-# toNiceGUITree(wd.getTree())
