@@ -17,7 +17,7 @@ def browser(path):
 
     if path is None:
         path = os.getcwd()
-    GUI.directory.set_value(path)
+    GUI.tabs["setup"].setIsofit(path)
 
     ui.run(reload=False)
 

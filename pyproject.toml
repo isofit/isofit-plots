@@ -35,6 +35,7 @@ dependencies = [
   "plotext",
   # "rioxarray",
   # "spectral",
+  "plotly",
   "xarray",
 ]
 

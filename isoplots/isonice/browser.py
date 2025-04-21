@@ -162,7 +162,8 @@ ui.add_head_html('''
 WORKING_DIRS = {
     # "NEON": "/Users/jamesmo/projects/isofit/research/NEON.bak/output/NIS01_20210403_173647/",
     # "emit": "/Users/jamesmo/projects/isofit/research/jemit/",
-    # "Pasadena": "/Users/jamesmo/projects/isofit/extras/examples/20171108_Pasadena"
+    # "Pasadena": "/Users/jamesmo/projects/isofit/extras/examples/20171108_Pasadena",
+    # "Test6": "/Users/jamesmo/Downloads/firefox/Test6"
 }
 
 
@@ -306,13 +307,17 @@ class Spectra:
 
             # opts = [file.name for file in self.data.getOutputs()]
             # opts = [f"{self.data.name}_rfl"]
-            opts = [f"{self.isofit.output.name}_rfl"]
+            # opts = [f"{self.isofit.output.name}_rfl"]
+            opts = WD.output.find("rfl", exc="subs", all=True)
 
             if opts != self.opts:
                 self.opts = opts
 
                 # Always default to the full RFL data
-                self.select.set_options(opts, value=opts[0])
+                # self.select.set_options(opts, value=opts[0])
+                self.select.set_options(opts)
+                if opts:
+                    self.select.set_value(opts[0])
             else:
                 self.plotImage(self.rgb)
 
@@ -474,21 +479,6 @@ class Config:
 
 #%%
 
-def blankFig(fkw={}, lkw={}):
-    lkw = {
-        "margin": dict(l=0, r=20, t=0, b=0),
-        "paper_bgcolor": "rgba(0, 0, 0, 0)",
-        "showlegend": False,
-        "template": "plotly_dark",
-    } | lkw
-
-    fig = go.Figure(**fkw)
-    fig.update_layout(**lkw)
-
-    return fig
-
-#%%
-
 def multiplot(figs=[], height=300):
     """
     Creates a multi plot object that shares X and Y axes
@@ -550,8 +540,6 @@ class MultiPlotLUT:
     Handles the construction and management of a single LUT plotting card in the LUTs
     tab
     """
-    isofit = None
-
     def __init__(self, parent, files=None, cache=None):
         """
         Parameters
@@ -630,14 +618,6 @@ class MultiPlotLUT:
 
                 self.ui = ui.plotly(multiplot()).classes("w-full")
 
-    def setOptions(self, *_):
-        """
-        Updates each file selection dropdown with the self.files list
-        This is called each time the list is updated
-        """
-        for plot in self.plots:
-            plot["select"].set_options(self.files)
-
     @property
     def new(self):
         """
@@ -654,7 +634,62 @@ class MultiPlotLUT:
             "select": None
         }
 
+    @property
+    def blank(self):
+        """
+        Creates a blank plotly figure with an empty scatter trace so that it renders
+        the plot in the GUI. Without the scatter, the plot will be invisible
+
+        Returns
+        -------
+        go.Figure
+            Blank plotly figure
+        """
+        return go.Figure(go.Scatter())
+
+    def load(self, file):
+        """
+        Loads a LUT dataset and stores it in the cache
+
+        Parameters
+        ----------
+        file : str
+            Path to a LUT file to load. If the path does not exist, will attempt to
+            find it under the WD
+
+        Returns
+        -------
+        xr.Dataset
+            Loaded LUT dataset
+        """
+        if file not in self.cache:
+            if Path(file).exists():
+                print(f"Loading given LUT: {file}")
+                try:
+                    self.cache[file] = luts.load(file).unstack()
+                except Exception as e:
+                    print(f"Failed to load, reason: {e}")
+            else:
+                print(f"Loading LUT from WD: {file}")
+                try:
+                    self.cache[file] = WD.load(path=file).unstack()
+                except Exception as e:
+                    print(f"Failed to load, reason: {e}")
+
+        return self.cache.get(file)
+
+    def setOptions(self, *_):
+        """
+        Updates each file selection dropdown with the self.files list
+        This is called each time the list is updated
+        """
+        for plot in self.plots:
+            plot["select"].set_options(self.files)
+
     def createSubplot(self):
+        """
+        Adds a new subplot to the figure
+        """
         plot = self.new
         self.plots.append(plot)
 
@@ -678,17 +713,17 @@ class MultiPlotLUT:
         # Update the figure with a blank
         self.updateUI()
 
-    def deleteSubplot(self, plot):
-        i = self.plots.index(plot)
-        self.column.remove(i)
-        self.plots.pop(i)
-        self.updateUI()
-
-        # Update labels for consistency
-        for i, plot in enumerate(self.plots[1:]):
-            plot["select"].props(f'label="LUT File for Plot {i+2}"')
-
     def updateSubplot(self, plot, file):
+        """
+        Updates a subplot with a new LUT input
+
+        Parameters
+        ----------
+        plot : dict
+            Plot data dict
+        file : str
+            LUT file to load
+        """
         if (lut := self.load(file)) is None:
             return
 
@@ -700,32 +735,33 @@ class MultiPlotLUT:
         )
         self.updateUI()
 
-    def load(self, file):
-        if file not in self.cache:
-            if Path(file).exists():
-                print(f"Loading given LUT: {file}")
-                try:
-                    self.cache[file] = luts.load(file).unstack()
-                except Exception as e:
-                    print(f"Failed to load, reason: {e}")
-            else:
-                print(f"Loading LUT from WD: {file}")
-                try:
-                    self.cache[file] = WD.load(path=file).unstack()
-                except Exception as e:
-                    print(f"Failed to load, reason: {e}")
-
-        return self.cache.get(file)
-
-    def updateUI(self):
+    def deleteSubplot(self, plot):
         """
-        Updates the GUI with a newly constructed multi-plot figure
+        Deletes a subplot and removes it from the UI
+
+        Parameters
+        ----------
+        plot : dict
+            Plot data dict
         """
-        plots = [plot["plot"] for plot in self.plots]
-        fig = multiplot(plots)
-        self.ui.update_figure(fig)
+        i = self.plots.index(plot)
+        self.column.remove(i)
+        self.plots.pop(i)
+        self.updateUI()
+
+        # Update labels for consistency
+        for i, plot in enumerate(self.plots[1:]):
+            plot["select"].props(f'label="LUT File for Plot {i+2}"')
 
     def changeFile(self, file):
+        """
+        Changes the primary LUT dataset and updates the quantities list
+
+        Parameters
+        ----------
+        file : str
+            Path to LUT file to load
+        """
         self.quants.disable()
         self.dims.disable()
 
@@ -734,15 +770,25 @@ class MultiPlotLUT:
 
         self.main["lut"] = lut
 
+        # Update the quantities list
         plottable = set(lut) - set(lut.drop_dims("wl"))
         if plottable:
             self.quants.set_options(sorted(plottable))
             self.quants.enable()
 
+        # Reset the quant selection
         self.quants.set_value(None)
 
     def changeQuant(self, quant):
-        print("changeQuantities", quant)
+        """
+        Changes the selected quantity from the active main LUT file and updates the
+        dimensions list
+
+        Parameters
+        ----------
+        quant : str
+            Quantity of the LUT to plot
+        """
         self.quant = quant
 
         lut = self.main["lut"]
@@ -758,11 +804,18 @@ class MultiPlotLUT:
         else:
             self.dims.disable()
 
-        # self.dims.set_value(None)
+        # Attempt to re-plot with the last chosen dim
         self.changeDim(self.dim)
 
     def changeDim(self, dim):
-        print("changeDimensions", dim)
+        """
+        Changes the plotting dimension
+
+        Parameters
+        ----------
+        dim : str
+            Dimension to plot along. All other dimensions will be squeezed to the mean
+        """
         self.dim = dim
 
         # Update all plots
@@ -777,7 +830,7 @@ class MultiPlotLUT:
 
     def plot(self, lut, quant, dim):
         """
-        Attempts to create a LUT plot
+        Attempts to create a LUT plot. If it fails, returns a blank figure
 
         Parameters
         ----------
@@ -811,19 +864,13 @@ class MultiPlotLUT:
             print(f"Failed to plot {quant}[{dim}], reason: {e}")
             return self.blank
 
-    @property
-    def blank(self):
+    def updateUI(self):
         """
-        Creates a blank plotly figure with an empty scatter trace so that it renders
-        the plot in the GUI. Without the scatter, the plot will be invisible
-
-        Returns
-        -------
-        go.Figure
-            Blank plotly figure
+        Updates the GUI with a newly constructed multi-plot figure
         """
-        return go.Figure(go.Scatter())
-
+        plots = [plot["plot"] for plot in self.plots]
+        fig = multiplot(plots)
+        self.ui.update_figure(fig)
 
 
 class LUTs:
@@ -882,7 +929,7 @@ class LUTs:
 
         Parameters
         ----------
-        card : MultiPlotLUT
+        plot : MultiPlotLUT
             Card to be removed
         """
         i = self.plots.index(plot)
@@ -907,6 +954,7 @@ class LUTs:
                 f"{name}/{file}"
                 for file in lut.find("lut", all=True)
             ]
+
         self.files.sort()
 
 
@@ -944,6 +992,10 @@ def toNiceGUITree(tree, *, nodes=None):
 
 class EnhancedTree(ui.tree):
     @property
+    def root(self):
+        return self.props["nodes"]
+
+    @property
     def branches(self):
         """
         Returns branch nodes, no leaves
@@ -953,9 +1005,29 @@ class EnhancedTree(ui.tree):
         branch : dict
             A branch node
         """
-        for branch in self.props["nodes"]:
+        for branch in self.root:
             if "children" in branch:
                 yield branch
+
+    def traverse(self, func, id):
+        """
+        Traverses the branches applying the given function until a value is found
+
+        Parameters
+        ----------
+        func : function
+            Function to call
+        id : str
+            ID of the node to find
+
+        Returns
+        -------
+        any
+            If the called function returns a value, returns that value
+        """
+        for branch in self.branches:
+            if value := func(id, branch=branch):
+                return value
 
     def getPath(self, id, *, branch=None):
         """
@@ -974,9 +1046,10 @@ class EnhancedTree(ui.tree):
             String path, eg. "configs/topoflux/config.json"
         """
         if branch is None:
-            for branch in self.branches:
-                if path := self.getPath(id, branch=branch):
-                    return path
+            return self.traverse(self.getPath, id)
+            # for branch in self.branches:
+            #     if path := self.getPath(id, branch=branch):
+            #         return path
 
         for node in branch["children"]:
             if node["id"] == id:
@@ -1002,9 +1075,10 @@ class EnhancedTree(ui.tree):
             String path, eg. "configs/topoflux/config.json"
         """
         if branch is None:
-            for branch in self.branches:
-                if node := self.findNode(id, branch=branch):
-                    return node
+            return self.traverse(self.findNode, id)
+            # for branch in self.branches:
+            #     if node := self.findNode(id, branch=branch):
+            #         return node
 
         for node in branch["children"]:
             if node["id"] == id:
@@ -1031,9 +1105,10 @@ class EnhancedTree(ui.tree):
             String path, eg. "configs/topoflux/config.json"
         """
         if branch is None:
-            for branch in self.branches:
-                if siblings := self.findSiblings(id, branch=branch):
-                    return siblings
+            return self.traverse(self.findSiblings, id)
+            # for branch in self.branches:
+            #     if siblings := self.findSiblings(id, branch=branch):
+            #         return siblings
 
         # Get the sibling directories of the source node
         nodes = branch["children"]
@@ -1102,7 +1177,7 @@ class Setup:
             data = isofit.getTree(info=True)
             data = toNiceGUITree(data)
 
-            ui.label("Click on an output file below to jump to an interactive component for that file [Work in Progress]")
+            # ui.label("Click on an output file below to jump to an interactive component for that file [Work in Progress]")
             # ui.label("Detected paths:")
 
             self.tree = EnhancedTree(data, on_select=lambda e: self.navToFile(e)).classes("border h-full w-full")
@@ -1125,20 +1200,26 @@ class Setup:
         name = event.value
 
         # Find the source node clicked
-        node = self.tree.findNode(name)
+        # node = self.tree.findNode(name)
 
-        if "children" in node:
-            # siblings = findSiblings(root)
-            siblings = self.tree.findSiblings(name)
+        if node := self.tree.findNode(name):
+            if "children" in node:
+                # siblings = findSiblings(root)
+                siblings = self.tree.findSiblings(name)
 
-            self.tree.collapse(siblings)
-            self.tree.expand([name])
-        else:
-            # Get the string path to the node
-            path = self.tree.getPath(name)
+                self.tree.collapse(siblings)
+                self.tree.expand([name])
+            else:
+                # Get the string path to the node
+                path = Path(self.tree.getPath(name))
 
-            print(path)
+                if len(path.parents) > 1:
+                    dir = path.parents[-2]
+                    path = path.relative_to(dir)
 
+                    # self.parent.navToFile(dir, path)
+                else:
+                    print("Cannot load files on the base")
 
 #%%
 
@@ -1232,5 +1313,8 @@ if __name__ in {"__main__", "__mp_main__"}:
     ui.run()
 
 #%%
-
-# wd = IsofitWD("/Users/jamesmo/projects/isofit/research/jemit")
+# wd = IsofitWD("/Users/jamesmo/projects/isofit/research/jemit/")
+# wd = IsofitWD("/Users/jamesmo/Downloads/firefox/Test6")
+# wd.output.files
+#
+# wd.output.find("rfl", exc="subs", all=True)
