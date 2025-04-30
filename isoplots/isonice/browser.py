@@ -355,6 +355,7 @@ class Spectra:
         ----------
         event
         """
+        self.spectras.clear()
         data = await run.io_bound(self.load, path=event.value)
         if data is None:
             print("No data available, returning")
@@ -1248,8 +1249,13 @@ class Setup:
                 )
 
     def appendSearch(self, path):
-        path = Path(f"{self.directory.value}/{path}").resolve()
-        self.directory.set_value(str(path))
+        current = Path(self.directory.value)
+        if not current.exists():
+            current = current.parent
+        new = (current / path).resolve()
+
+        # path = Path(f"{self.directory.value}/{path}").resolve()
+        self.directory.set_value(str(new))
 
     async def reset(self, isofit=None):
         ...
