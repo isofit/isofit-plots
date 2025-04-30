@@ -7,9 +7,11 @@ Usage:
 import json
 import logging
 import re
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 
+import click
 import plotly.express as px
 import plotly.graph_objects as go
 import xarray as xr
@@ -20,9 +22,10 @@ from isofit.radiative_transfer import luts
 
 # TODO: This will source from isofit once the PR is accepted
 try:
-    from isofit.utils.wd import IsofitWD
+    from isofit.utils.wd import IsofitWD, Loaders
 except:
-    from isoplots.isonice.wd import IsofitWD
+    logging.exception("Failed to load IsofitWD from ISOFIT, using fallback")
+    from isoplots.isonice.wd import IsofitWD, Loaders
 
 # Global shared working directory
 WD = IsofitWD(".")
@@ -33,6 +36,9 @@ dark.enable()
 ui.context.client.content.classes('h-screen')
 ui.add_head_html('''
     <style type="text/css">
+    .hide-header .ag-header {
+        display: none;
+    }
     .nicegui-content {
         padding: 0;
     }
@@ -160,10 +166,7 @@ ui.add_head_html('''
 
 # Optional hard-coded output directories which will be added as buttons to quickly switch/load them
 WORKING_DIRS = {
-    # "NEON": "/Users/jamesmo/projects/isofit/research/NEON.bak/output/NIS01_20210403_173647/",
-    # "emit": "/Users/jamesmo/projects/isofit/research/jemit/",
-    # "Pasadena": "/Users/jamesmo/projects/isofit/extras/examples/20171108_Pasadena",
-    # "Test6": "/Users/jamesmo/Downloads/firefox/Test6"
+    # "Name": "/path/to/set"
 }
 
 
@@ -258,6 +261,8 @@ class Spectra:
     data = None
     opts = None
 
+    rgb = None
+
     def __init__(self, parent):
         """
         Parameters
@@ -271,8 +276,14 @@ class Spectra:
             with splitter.before:
                 with ui.card().classes("w-full border"):
                     with ui.row().classes("w-full"):
-                        ui.button("Reset", on_click=self.reset).classes("w-20 h-full")
-                        self.select = ui.select([], label="Select data file", on_change=self.changeFile).classes("w-60")
+
+                        ui.button("Reset", on_click=self.resetImage).classes("w-20 h-full")
+                        self.select = ui.select([],
+                            label = "Select data file",
+                            on_change = self.changeFile,
+                            new_value_mode = "add-unique",
+                        ).classes("w-60")
+
                         with ui.icon("info", size="md").classes("w-20 h-full"):
                             with ui.tooltip():
                                 ui.label("Choose a file on the left to plot the RGB image below")
@@ -299,38 +310,69 @@ class Spectra:
     async def reset(self, isofit=None):
         # if isofit and isofit.data:
         #     self.data = isofit.data
-        if isofit:
-            self.isofit = isofit
+        # if isofit:
+        #     self.isofit = isofit
+        #
+        # if self.isofit:
+        self.spectras.clear()
 
-        if self.isofit:
-            self.spectras.clear()
+        # opts = [file.name for file in self.data.getOutputs()]
+        # opts = [f"{self.data.name}_rfl"]
+        # opts = [f"{self.isofit.output.name}_rfl"]
+        # opts = WD.output.find("rfl", exc="subs", all=True)
+        opts = WD.find("rfl", all=True, exc=["hdr", "subs"])
 
-            # opts = [file.name for file in self.data.getOutputs()]
-            # opts = [f"{self.data.name}_rfl"]
-            # opts = [f"{self.isofit.output.name}_rfl"]
-            opts = WD.output.find("rfl", exc="subs", all=True)
+        if opts != self.opts:
+            self.opts = opts
 
-            if opts != self.opts:
-                self.opts = opts
+            # Always default to the full RFL data
+            # self.select.set_options(opts, value=opts[0])
+            self.select.set_options(opts)
+            if opts:
+                self.select.set_value(opts[0])
 
-                # Always default to the full RFL data
-                # self.select.set_options(opts, value=opts[0])
-                self.select.set_options(opts)
-                if opts:
-                    self.select.set_value(opts[0])
-            else:
-                self.plotImage(self.rgb)
+    def resetImage(self):
+        self.spectras.clear()
+        self.plotImage(self.rgb)
+
+    def load(self, path):
+        if Path(path).exists():
+            try:
+                return Loaders.envi(path)
+            except:
+                logging.exception("Failed to load envi")
+        else:
+            try:
+                return WD.load(path=path)
+            except:
+                logging.exception("Failed to load via WD")
 
     async def changeFile(self, event):
-        file = event.value
-        # data = self.data.load(name=file)
-        # data = await run.io_bound(self.data.load, name=file)
-        # if "_subs" in file:
-        #     self.rgb = await run.io_bound(self.data.subs.rgb)
-        # else:
-        # self.rgb = await run.io_bound(self.data.full.rgb)
-        self.rgb = await run.io_bound(self.isofit.output.rgb)
-        self.rfl = await run.io_bound(self.isofit.output.load, path=event.value)
+        """
+        TODO
+
+        Parameters
+        ----------
+        event
+        """
+        data = await run.io_bound(self.load, path=event.value)
+        if data is None:
+            print("No data available, returning")
+            return
+
+        r = 60
+        g = 40
+        b = 30
+
+        rgb = data.sel(band=[r, g, b]).transpose("y", "x", "band")
+        rgb /= rgb.max(["x", "y"])  # Brightens image
+
+        # Convert to pixel coords for easier plotting
+        rgb["x"] = range(rgb.x.size)
+        rgb["y"] = range(rgb.y.size)
+
+        self.rgb = rgb
+        self.rfl = data
 
         self.plotImage(self.rgb)
 
@@ -464,13 +506,16 @@ class Config:
         self.editor = ui.json_editor({'content': {'json': {}}, 'readOnly': True}).classes('w-full jse-theme-dark')
 
     async def reset(self, isofit=None):
-        if isofit:
-            self.isofit = isofit
-            configs = isofit.find("config/.json", all=True)
-            self.select.set_options(configs, value=configs[0])
+        configs = WD.find("config/.json", all=True)
+        self.select.set_options(configs, value=configs[0])
+        # if isofit:
+        #     self.isofit = isofit
+        #     configs = isofit.find("config/.json", all=True)
+        #     self.select.set_options(configs, value=configs[0])
 
     def loadConfig(self, event):
-        data = self.isofit.load(path=event.value)
+        # data = self.isofit.load(path=event.value)
+        data = WD.load(path=event.value)
         self.editor.run_editor_method('updateProps', {'content': {'json': data}})
 
     def readOnly(self, event):
@@ -941,24 +986,11 @@ class LUTs:
         Resets the the file options when the WD changes
         """
         self.files.clear()
-
-        # Retrieve the known LUT files of this WD
-        luts = {
-            name: obj
-            for name, obj in WD.dirs.items()
-            if isinstance(obj, WD.classes["lut"])
-        }
-
-        for name, lut in luts.items():
-            self.files += [
-                f"{name}/{file}"
-                for file in lut.find("lut", all=True)
-            ]
-
+        self.files += WD.find("lut/.nc", all=True)
         self.files.sort()
 
 
-def toNiceGUITree(tree, *, nodes=None):
+def toNiceGUITree(tree, *, path=None, nodes=None):
     """
     Recursively converts an IsofitWD tree (with info) into a NiceGUI-compatible data
     structure for the tree component
@@ -978,15 +1010,27 @@ def toNiceGUITree(tree, *, nodes=None):
     """
     if nodes is None:
         nodes = [{"id": "root", "desc": None, "children": []}]
-        toNiceGUITree(tree, nodes=nodes[-1]["children"])
+        toNiceGUITree(tree, path=".", nodes=nodes[-1]["children"])
     else:
-        for info, path in tree.items():
-            if isinstance(path, dict):
-                nodes.append({"id": info.name, "desc": info.info, "children": []})
-                toNiceGUITree(path, nodes=nodes[-1]["children"])
+        for file in tree:
+            if isinstance(file, dict):
+                for subdir, files in file.items():
+                    nodes.append({
+                        "id"      : f"{path}/{subdir.name}",
+                        "label"   : subdir.name,
+                        "desc"    : subdir.info,
+                        "children": []
+                    })
+                    toNiceGUITree(files,
+                        path  = nodes[-1]["id"],
+                        nodes = nodes[-1]["children"]
+                    )
             else:
-                for file in path:
-                    nodes.append({"id": file.name, "desc": file.info})
+                nodes.append({
+                    "id"   : f"{path}/{file.name}",
+                    "label": file.name,
+                    "desc" : file.info
+                })
     return nodes
 
 
@@ -1047,9 +1091,6 @@ class EnhancedTree(ui.tree):
         """
         if branch is None:
             return self.traverse(self.getPath, id)
-            # for branch in self.branches:
-            #     if path := self.getPath(id, branch=branch):
-            #         return path
 
         for node in branch["children"]:
             if node["id"] == id:
@@ -1076,9 +1117,6 @@ class EnhancedTree(ui.tree):
         """
         if branch is None:
             return self.traverse(self.findNode, id)
-            # for branch in self.branches:
-            #     if node := self.findNode(id, branch=branch):
-            #         return node
 
         for node in branch["children"]:
             if node["id"] == id:
@@ -1106,9 +1144,6 @@ class EnhancedTree(ui.tree):
         """
         if branch is None:
             return self.traverse(self.findSiblings, id)
-            # for branch in self.branches:
-            #     if siblings := self.findSiblings(id, branch=branch):
-            #         return siblings
 
         # Get the sibling directories of the source node
         nodes = branch["children"]
@@ -1143,51 +1178,113 @@ class Setup:
                         continue
                     ui.button(name, on_click=setWD)
 
-        self.directory = ui.input("Working Directory or Configuration JSON",
-            validation = self.setIsofit,
-        ).classes("w-full")
+        # self.directory = ui.input("Working Directory",
+        #     validation = self.setIsofit,
+        # ).classes("w-full")
+        with ui.row().classes("w-full items-center"):
+            with ui.button("Set as Working Directory",
+                on_click = lambda: self.setIsofit(self.directory.value)
+            ).classes("w-[15%]"):
+                with ui.tooltip():
+                    ui.label("Set this path as the active working directory")
+                    ui.label("This will recursively search for ISOFIT products")
+                    ui.label("Only do this on known directories as this is an expensive operation")
+                    ui.label("Executing this on protected or excessively deep directories may crash this program's server")
 
+            self.directory = ui.input("Search",
+                validation = self.glob,
+            ).classes("w-[83%]")
+
+        self.preview = ui.column().classes("w-full")
+
+        self.filter = ui.input("filter").classes("w-full")
+        self.filter.visible = False
         self.directoryTree = ui.scroll_area().classes("w-full h-full")
+
+    def glob(self, path):
+        """
+        TODO
+
+        Parameters
+        ----------
+        path : str
+        """
+        path = Path(path)
+        if not path.exists():
+            glob = path.parent.glob(f"{path.name}*")
+        else:
+            glob = path.glob("*")
+
+        dirs = []
+        files = []
+        for file in glob:
+            if file.is_dir():
+                dirs.append(file.name)
+            else:
+                files.append(file.name)
+
+        data = [
+            {"path": ".."}
+        ] + [
+            {"path": f"{d}/"}
+            for d in sorted(dirs)
+        ] + [
+            {"path": f}
+            for f in sorted(files)
+        ]
+
+        self.preview.clear()
+        if data:
+            with self.preview:
+                ui.aggrid({
+                    "columnDefs": [
+                        {"field": "path"}
+                    ],
+                    "rowData": data
+                }, theme="balham-dark") \
+                .classes("hide-header") \
+                .on('cellClicked',
+                    lambda event: self.appendSearch(event.args["value"])
+                )
+
+    def appendSearch(self, path):
+        path = Path(f"{self.directory.value}/{path}").resolve()
+        self.directory.set_value(str(path))
 
     async def reset(self, isofit=None):
         ...
 
-    def setIsofit(self, value):
+    def setIsofit(self, path):
         self.directoryTree.clear()
 
-        # Try to parse the input path
-        # try:
-        #     isofit = IsofitOutput(value)
-        #     self.parent.isofit = isofit
-        #     # self.isofit.changePath(value)
-        # except Exception as e:
-        #     # Output to UI the error
-        #     self.parent.toggleTabs(all=False)
-        #     return str(e)
-        WD.reset(value)
-        isofit = IsofitWD(value)
-        self.parent.isofit = isofit
-        # if not self.isofit.dirs:
-        #     return "Could not parse as a valid ISOFIT output directory"
+        WD.reset(path, recursive=True)
+        self.parent.isofit = WD
 
         self.parent.toggleTabs(all=True)
 
         # Set the output directory tree
         with self.directoryTree:
-            data = isofit.getTree(info=True)
+            data = WD.getTree(info=True)
             data = toNiceGUITree(data)
+            data[0]["label"] = str(WD.path)
 
             # ui.label("Click on an output file below to jump to an interactive component for that file [Work in Progress]")
             # ui.label("Detected paths:")
 
-            self.tree = EnhancedTree(data, on_select=lambda e: self.navToFile(e)).classes("border h-full w-full")
+            self.tree = EnhancedTree(data, on_select=lambda e: self.navToFile(e)) \
+            .classes("border h-full w-full") \
+            .props("no-transition dense")
+
             self.tree.expand(["root"])
             self.tree.add_slot('default-header', '''
-                <span :props="props">{{ props.node.id }}</strong></span>
+                <span :props="props">{{ props.node.label }}</strong></span>
             ''')
             self.tree.add_slot('default-body', '''
                 <span :props="props">{{ props.node.desc }}</span>
             ''')
+
+            self.filter.visible = True
+            self.filter.bind_value_to(self.tree, "filter")
 
     def navToFile(self, event):
         """
@@ -1200,11 +1297,8 @@ class Setup:
         name = event.value
 
         # Find the source node clicked
-        # node = self.tree.findNode(name)
-
         if node := self.tree.findNode(name):
             if "children" in node:
-                # siblings = findSiblings(root)
                 siblings = self.tree.findSiblings(name)
 
                 self.tree.collapse(siblings)
@@ -1290,31 +1384,109 @@ class Tabs:
         # Tabs are always reset when this function is called
         self.resetTabs()
 
-        for name, valid in self.valid.items():
-            if all is not None:
-                valid = all
-
-            tab = self.pnls[name]
-            btn = self.btns[name]
-            if valid:
-                btn.enable()
-                tab.enable()
-                tab.classes(remove="disabled")
-            else:
-                btn.disable()
-                tab.disable()
-                tab.classes(add="disabled")
+        # for name, valid in self.valid.items():
+        #     if all is not None:
+        #         valid = all
+        #
+        #     tab = self.pnls[name]
+        #     btn = self.btns[name]
+        #     if valid:
+        #         btn.enable()
+        #         tab.enable()
+        #         tab.classes(remove="disabled")
+        #     else:
+        #         btn.disable()
+        #         tab.disable()
+        #         tab.classes(add="disabled")
 
 
 GUI = Tabs()
 
 
-if __name__ in {"__main__", "__mp_main__"}:
-    ui.run()
+def portAvail(port: int) -> bool:
+    """
+    checks if a port is available
+
+    Parameters
+    ----------
+    port : int
+        Port to check
+
+    Returns
+    -------
+    bool
+        True if available, False otherwise
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) != 0
+
+
+def checkPorts(start : int, end : int = 100) -> None:
+    """
+    Checks for an open port between the start and end range
+
+    Parameters
+    ----------
+    start : int
+        Starting port
+    end : int
+        Offset end from the starting point to check in range of
+    """
+    if not portAvail(start):
+        for port in range(start+1, start+end):
+            print(f"Checking {port}")
+            if portAvail(port):
+                print(f"Port {start} is already in use, recommend using --port {port}")
+                break
+        else:
+            print(f"All ports between {start}-{start+end} are in use")
+
+
+def launch(path=None, check=False, **kwargs):
+    """
+    Launches the NiceGUI server
+
+    Parameters
+    ----------
+    path : str, default=None
+        Optional path to initialize with
+    check : bool, default=False
+        Check for an open port, may delay startup
+    **kwargs : dict
+        Additional key-word arguments passed directly to ui.run
+    """
+    if check:
+        print("Checking ports")
+        checkPorts(kwargs.get("port", 8080))
+
+    if path:
+        GUI.tabs["setup"].directory.set_value(path)
+
+    print("Launching")
+    ui.run(**kwargs)
+
+
+@click.command()
+@click.option("-p", "--path", default=".", help="Working directory to initially load with")
+@click.option("-c", "--check", default=False, is_flag=True, help="Checks for an open port up to 100 after the given port. May cause a delay in startup")
+@click.option("--port", type=int, default=8080, help="Port to use. Defaults to 8080")
+@click.option("-r", "--reload", default=False, is_flag=True, help="Enable hot-reloading -- only available if executing the browser.py script directly")
+def cli(**kwargs):
+    """
+    Launches the NiceGUI browser server
+    """
+    launch(**kwargs)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level="DEBUG")
+    cli()
+
+# When executing directly via Python, NiceGUI spawns the page in a separate process
+# Click doesn't work in this, so launch directly -- inherits from the first call
+elif __name__ == "__mp_main__":
+    logging.basicConfig(level="DEBUG")
+    launch()
+
 
 #%%
-# wd = IsofitWD("/Users/jamesmo/projects/isofit/research/jemit/")
-# wd = IsofitWD("/Users/jamesmo/Downloads/firefox/Test6")
-# wd.output.files
-#
-# wd.output.find("rfl", exc="subs", all=True)
