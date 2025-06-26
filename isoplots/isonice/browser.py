@@ -171,6 +171,19 @@ WORKING_DIRS = {
 
 
 def plotlyColor(i):
+    """
+    Retrieves a plotly color
+
+    Parameters
+    ----------
+    i : int
+        Index color, wraps if the index exceeds to length of the color list
+
+    Returns
+    -------
+    str
+        Hex color
+    """
     c = px.colors.qualitative.Plotly
     return c[i % len(c)]
 
@@ -258,10 +271,6 @@ class Logs:
 
 class Spectra:
     plot = None
-    data = None
-    opts = None
-
-    rgb = None
 
     def __init__(self, parent):
         """
@@ -272,29 +281,56 @@ class Spectra:
         """
         self.parent = parent
 
+        self.inputs = [] # Tracks input rows
+        self.traces = [] # Tracks annotations
+        self.spectras = [] # SpectraPlot objects
+
+        self.files = observables.ObservableList([], on_change=self.setOptions)
+
         with ui.splitter(value=30).classes("w-full h-full") as splitter:
             with splitter.before:
-                with ui.card().classes("w-full border"):
-                    with ui.row().classes("w-full"):
+                with ui.card().classes("w-full") as self.header:
+                    with ui.button_group().classes("w-full").props("outline"):
 
-                        ui.button("Reset", on_click=self.resetImage).classes("w-20 h-full")
-                        self.select = ui.select([],
-                            label = "Select data file",
-                            on_change = self.changeFile,
-                            new_value_mode = "add-unique",
-                        ).classes("w-60")
+                        ui.button("Reset", on_click=self.resetImage) \
+                            .classes("flex-1") \
+                            .props("outline") \
+                            .tooltip("Removes all annotations and spectra plots")
 
-                        with ui.icon("info", size="md").classes("w-20 h-full"):
-                            with ui.tooltip():
-                                ui.label("Choose a file on the left to plot the RGB image below")
-                                ui.label("Click on the image to plot spectra on the right")
-                                ui.label("Click on the same point again to delete it")
-                                ui.label("Some files may not be compatible")
+                        ui.button("Add File", on_click=self.createFileRow) \
+                            .classes("flex-1") \
+                            .props("outline") \
+                            .tooltip("This must be the same X/Y dimensions as the first file")
+
+                        with (ui.dropdown_button("Settings")
+                            .classes("flex-1")
+                            .props("outline")
+                        ):
+                            with ui.row().classes("p-4"):
+                                with ui.column():
+                                    self.r = ui.number(label="Red Band", value=60, on_change=self.createImage, precision=0).props("dense")
+                                    self.g = ui.number(label="Green Band", value=40, on_change=self.createImage, precision=0).props("dense")
+                                    self.b = ui.number(label="Blue Band", value=30, on_change=self.createImage, precision=0).props("dense")
+                                with ui.column():
+                                    self.brighten = ui.switch("Brighten Image", value=True, on_change=self.createImage)
+                                    self.annoDelClick = ui.switch("Delete via Click", value=False).tooltip("Clicking on annotation points on the image will remove the spectra plot. Alternatively, use the dropdown menu on the top-left corner of the plot")
+                                    # self.shareX = ui.switch("Share X axis", value=False)
+                                    # self.sharey = ui.switch("Share Y axis", value=False)
+
+                    self.createFileRow(main=True)
+
 
                 # Generic placeholder figure
                 self.setImage(go.Figure())
 
-                self.plot = ui.plotly(self.img).classes('w-full h-full')
+                with ui.element().classes("relative w-full") as self.column:
+                    # Loading overlay
+                    with ui.card().classes("absolute inset-0 z-10 flex items-center justify-center bg-white/70") as self.loading:
+                        ui.spinner(size='xl')
+                    self.loading.visible = False
+
+                    # Plotly figure
+                    self.plot = ui.plotly(self.img).classes('w-full h-full')
 
                 # Override the event to delete the source string which crashes the server when the image is too large
                 self.plot.on('plotly_click', js_handler="""
@@ -303,39 +339,130 @@ class Spectra:
                         return emitEvent('clickedPoint', event);
                     };
                 """)
-                ui.on('clickedPoint', self.addAnotation)
+                ui.on('clickedPoint', self.annotationEvent)
             with splitter.after:
-                self.spectras = ui.scroll_area().classes("h-full w-full border")
+                with ui.card().classes("h-full w-full p-0"):
+                    self.scroll = ui.scroll_area().classes("h-full w-full")
 
-    async def reset(self, isofit=None):
-        # if isofit and isofit.data:
-        #     self.data = isofit.data
-        # if isofit:
-        #     self.isofit = isofit
-        #
-        # if self.isofit:
+    async def setOptions(self, *_):
+        """
+        Updates each file selection dropdown with the self.files list
+        This is called each time the list is updated
+        """
+        for row in self.inputs:
+            row["select"].set_options(self.files)
+
+    def createFileRow(self, main=False):
+        """
+        Creates a new input row
+
+        Parameters
+        ----------
+        main : bool, default=False
+            The main row (self.inputs[0]) cannot be removed, so the delete button is
+            replaced with an info tooltip
+        """
+        row = {}
+        self.inputs.append(row)
+        color = plotlyColor(len(self.inputs)-1)
+
+        with self.header:
+            with ui.row().classes("w-full"):
+                row["colorBtn"] = ui.button(icon="show_chart") \
+                .props("dense outline") \
+                .classes(f"h-full") \
+                .style(f"--q-primary: {color};")
+
+                row["select"] = ui.select(
+                    options = self.files,
+                    label = "Select data file",
+                    on_change = lambda e: self.loadFile(e.value, row),
+                    new_value_mode = "add-unique",
+                ).classes("flex-1").props("dense")
+
+                if main:
+                    with (ui.button(icon="question_mark")
+                        .classes("h-full")
+                        .props("dense outline")
+                        .style(f"--q-primary: {color};")
+                    ):
+                        with ui.tooltip():
+                            ui.label("This file will be the image plotted below")
+                            ui.label("Changes to the settings will use this data")
+                            ui.label("Additional files must be the same X/Y/Wavelength shape to plot correctly")
+                            ui.label("Some plotting features are only available if certain requirements are met:")
+                            ui.label("  - Subtraction, % Difference : Only two data files are loaded")
+                            ui.label("  - Average : Two or more data files are loaded")
+                else:
+                    row["removeBtn"] = ui.button(
+                        icon="close",
+                        on_click=lambda e: self.delInput(row)
+                    ).classes("h-full") \
+                    .props("dense outline") \
+                    .style(f"--q-primary: {color};") \
+                    .tooltip("Remove this data")
+
+    async def delInput(self, row):
+        """
+        Removes an input row and its data from the spectra plots
+
+        Parameters
+        ----------
+        row : dict
+            Input row to remove
+        """
+        self.loading.visible = True
+
+        i = self.inputs.index(row)
+        self.header.remove(i+1)
+        self.inputs.remove(row)
+
+        # Update colors of buttons
+        for j, row in enumerate(self.inputs[i:]):
+            color = plotlyColor(i+j)
+            row["colorBtn"].style(f"--q-primary: {color};")
+            row["removeBtn"].style(f"--q-primary: {color};")
+
+        # Update colors of spectra plots
+        for spectra in self.spectras:
+            await spectra.build()
+
+        self.loading.visible = False
+
+    async def reset(self, *_):
+        """
+        Resets the tab
+        """
+        self.scroll.clear()
+        self.traces.clear()
         self.spectras.clear()
 
-        # opts = [file.name for file in self.data.getOutputs()]
-        # opts = [f"{self.data.name}_rfl"]
-        # opts = [f"{self.isofit.output.name}_rfl"]
-        # opts = WD.output.find("rfl", exc="subs", all=True)
-        opts = WD.find("rfl", all=True, exc=["hdr", "subs"])
+        self.files.clear()
+        self.files += WD.find("rfl", all=True, exc=["hdr", "subs"])
+        self.files.sort()
 
-        if opts != self.opts:
-            self.opts = opts
+        self.inputs[0]["select"].set_value(self.files[0])
 
-            # Always default to the full RFL data
-            # self.select.set_options(opts, value=opts[0])
-            self.select.set_options(opts)
-            if opts:
-                self.select.set_value(opts[0])
-
-    def resetImage(self):
+    async def resetImage(self):
+        """
+        Resets the image, deleting all annotations and spectra plots
+        """
+        self.scroll.clear()
+        self.traces.clear()
         self.spectras.clear()
-        self.plotImage(self.rgb)
+
+        await self.createImage()
 
     def load(self, path):
+        """
+        TODO
+
+        Parameters
+        ----------
+        path : str
+            Path to data file to load. If the path exists, loads directly; otherwise
+            use IsofitWD to find and load
+        """
         if Path(path).exists():
             try:
                 return Loaders.envi(path)
@@ -347,145 +474,437 @@ class Spectra:
             except:
                 logging.exception("Failed to load via WD")
 
-    async def changeFile(self, event):
+    async def loadFile(self, file, row):
         """
-        TODO
+        Loads a data file
 
         Parameters
         ----------
-        event
+        file : str
+            File to load
+        row : dict
+            Input dict associated with this file
         """
-        self.spectras.clear()
-        data = await run.io_bound(self.load, path=event.value)
-        if data is None:
+        self.loading.visible = True
+
+        row["data"] = await run.io_bound(self.load, path=file)
+
+        if row["data"] is None:
             print("No data available, returning")
+            self.loading.visible = False
             return
 
-        r = 60
-        g = 40
-        b = 30
+        if row == self.inputs[0]:
+            self.scroll.clear()
+            self.traces.clear()
+            self.spectras.clear()
 
-        rgb = data.sel(band=[r, g, b]).transpose("y", "x", "band")
-        rgb /= rgb.max(["x", "y"])  # Brightens image
+            # Set the limits to the band number inputs
+            min = int(row["data"].band.min())
+            max = int(row["data"].band.max())
+            for opt in {self.r, self.g, self.b}:
+                opt.min = min
+                opt.max = max
 
-        # Convert to pixel coords for easier plotting
+            await self.createImage()
+        else:
+            for spectra in self.spectras:
+                await spectra.build()
+
+            self.loading.visible = False
+
+    async def createImage(self):
+        """
+        Creates the data for the image and passes it along to the frontend
+
+        This image is always self.inputs[0], ie. the first input
+        """
+        self.loading.visible = True
+
+        bands = [self.r.value, self.g.value, self.b.value]
+        rgb = self.inputs[0]["data"].sel(band=bands).transpose("y", "x", "band")
+
+        if self.brighten.value:
+            rgb /= rgb.max(["x", "y"])
+
+        # Convert to pixel coords for easier pixel selection
         rgb["x"] = range(rgb.x.size)
         rgb["y"] = range(rgb.y.size)
 
-        self.rgb = rgb
-        self.rfl = data
+        await self.plotImage(rgb)
 
-        self.plotImage(self.rgb)
+        # Re-add any traces that may still exist
+        for trace in self.traces:
+            self.img.add_trace(trace)
+        self.plot.update()
+
+        self.loading.visible = False
 
     def setImage(self, figure):
+        """
+        Sets the frontend image's figure
+
+        Parameters
+        ----------
+        figure : go.Figure
+
+        Returns
+        -------
+
+        """
         self.img = figure
         figure.update_layout(
             margin = dict(l=0, r=20, t=0, b=0),
-            # plot_bgcolor  = "rgba(0, 0, 0, 0)",
             paper_bgcolor = "rgba(0, 0, 0, 0)",
             showlegend    = False
         )
         if self.plot:
             self.plot.update_figure(figure)
 
-    def plotImage(self, rgb):
-        # rgb = await run.io_bound(self.data.rgb)
+    async def plotImage(self, image):
+        """
+        Creates image figure to pass to the frontend
+
+        Parameters
+        ----------
+        image : xarray.Dataset
+            Image to plot
+        """
         try:
-            img = px.imshow(rgb, template="plotly_dark")
+            img = px.imshow(image, template="plotly_dark")
         except Exception as e:
             print(f"Failed to plot spectra image, reason: {e}")
             img = go.Figure()
 
         self.setImage(img)
 
-    def addAnotation(self, event):
-        # Images will only ever have 1 point returned
-        point = event.args['points'][0]
-        data = point['data']
+    async def addAnotation(self, x, y):
+        """
+        Adds an annotation point to the image and creates a spectra plot
 
-        if data['type'] == "image":
-            i = len(self.img.data)
-            y, x = point['pointIndex']
+        Parameters
+        ----------
+        x : int
+            X coordinate
+        y : int
+            Y coordinate
+        """
+        i = len(self.img.data)
 
-            self.img.add_trace(go.Scatter(
-                x = [x],
-                y = [y],
-                mode = "markers+text",
-                name = f"Spectra {i} @ ({x}, {y})",
-                text = [str(i)],
-                marker = {"symbol": "circle-open"},
-                textposition = "top center",
-            ))
-            self.plotSpectra(i, x, y)
-
-        elif data['type'] == "scatter":
-            i = point['curveNumber']
-
-            data = list(self.img.data)
-            data.pop(i)
-            self.img.data = data
-
-            # Update names and texts
-            for trace in self.img.data[i:]:
-                pos = int(trace.text[0])
-                new = str(pos-1)
-                trace.name = re.sub(r"(\d+) @", f"{new} @", trace.name)
-                trace.text = [new]
-
-            # Remove the corresponding spectra plot
-            self.spectras.remove(i-1)
-
-            # Update titles and colors
-            for i, spectra in enumerate(self.spectras):
-                i += 1 # Always +1 because 0 is the image data
-                trace = data[i]
-                spectra.figure.update_layout(
-                    title = {
-                        'text': trace.name
-                    }
-                )
-                spectra.figure.update_traces(
-                    line = {
-                        'color': plotlyColor(i)
-                    }
-                )
-                spectra.update()
+        trace = go.Scatter(
+            x = [x],
+            y = [y],
+            mode = "markers+text",
+            name = f"Spectra {i} @ ({x}, {y})",
+            text = [str(i)],
+            marker = {"symbol": "circle-open"},
+            textposition = "top center",
+        )
+        self.traces.append(trace)
+        self.img.add_trace(trace)
+        await self.plotSpectra(i, x, y)
 
         self.plot.update()
 
-    def plotSpectra(self, i, x, y):
-        with self.spectras:
-            spectra = self.rfl.isel(x=x, y=y)
-            # spectra = spectra.rename(band_data='Reflectance', wavelength='Wavelength')
-            spectra.name = "Reflectance"
-            spectra = spectra.rename(wavelength='Wavelength')
-            spectra = spectra.where(spectra != spectra.min())
-            # data = spectra.Reflectance
-            df = spectra.to_dataframe()
+    async def delAnnotation(self, i):
+        """
+        Deletes an annotation from the image as well as removes the spectra plot
+        associated with that point
 
-            # Remove min values
+        Parameters
+        ----------
+        i : int
+            Index of the annotation to remove
+        """
+        # Remove the annotation from the image
+        data = list(self.img.data)
+        data.pop(i)
+        self.img.data = data
 
-            fig = px.line(df,
-                x = 'Wavelength',
-                y = 'Reflectance',
-                height   = 300,
-                template = "plotly_dark",
-                title = f"Spectra {i} @ ({x}, {y})",
-                # color = Colors[i % len(Colors)]
-            )
-            fig.update_layout(
-                margin = dict(l=0, r=0, t=30, b=0),
-                # plot_bgcolor  = "rgba(0, 0, 0, 0)",
-                paper_bgcolor = "rgba(0, 0, 0, 0)",
-                # showlegend    = True
-            )
-            fig.update_traces(
-                line = {
-                    'color': plotlyColor(i)
+        # Update names and texts
+        for trace in self.img.data[i:]:
+            pos = int(trace.text[0])
+            new = str(pos-1)
+            trace.name = re.sub(r"(\d+) @", f"{new} @", trace.name)
+            trace.text = [new]
+
+        # Convert to 0-indexed
+        i -= 1
+
+        # Remove the corresponding spectra plot
+        self.scroll.remove(i)
+        self.spectras.pop(i)
+        self.traces.pop(i)
+
+        # Update the colors
+        for spectra in self.spectras[i:]:
+            spectra.updateID(spectra.id - 1)
+
+        self.plot.update()
+
+    async def annotationEvent(self, event):
+        """
+        Event handler when an image pixel is clicked. If the pixel has an annotation,
+        it deletes it. If it doesn't, it adds an annotation.
+
+        Parameters
+        ----------
+        event : nicegui.events.GenericEventArguments
+            Event triggered when the image is clicked
+        """
+        print(type(event))
+        # Images will only ever have 1 point returned
+        point = event.args["points"][0]
+        data = point["data"]
+
+        # Clicked a pixel on the image
+        if data["type"] == "image":
+            y, x = point["pointIndex"]
+            await self.addAnotation(x, y)
+
+        # Clicked an annotation
+        elif self.annoDelClick.value and data["type"] == "scatter":
+            i = point["curveNumber"]
+            await self.delAnnotation(i)
+
+    async def plotSpectra(self, i, x, y):
+        """
+        Creates a spectra plot for a pixel
+
+        Parameters
+        ----------
+        i : int
+            Index ID to assign
+        x : int
+            X coordinate
+        y : int
+            Y coordinate
+        """
+        with self.scroll:
+            spectra = SpectraPlot(i, x, y, self)
+            await spectra.build()
+
+            self.spectras.append(spectra)
+
+
+class SpectraPlot:
+    def __init__(self, id, x, y, parent):
+        """
+        Plots one or more spectra lines for a given pixel
+
+        Parameters
+        ----------
+        id : int
+            ID of the plot
+        x : int
+            X coordinate
+        y : int
+            Y coordinate
+        parent : Spectra
+            Parent object to refer to for things like close plot or data retrieval
+        """
+        self.id = id
+        self.x = x
+        self.y = y
+        self.parent = parent
+
+        self.cache = []
+
+        with ui.card().classes("relative w-full p-2"):
+            with ui.card().classes("absolute inset-0 z-20 flex items-center justify-center bg-white/70") as self.loading:
+                ui.spinner(size='xl')
+            self.loading.visible = False
+
+            # Dropdown button in top-left corner
+            with ui.button(icon="more_horiz", on_click=self.updateOptions).classes("absolute top-0 left-0 z-10").props("outline dense"):
+                with ui.menu() as menu:
+                    ui.menu_item("Close plot", on_click=self.close)
+                    self.trim = ui.switch("Remove Minimums", value=True, on_change=self.build)
+                    self.styles = ui.radio(
+                        options=["Separate", "Average", "Subtract", "% Difference"],
+                        value="Separate",
+                        on_change=self.styleChanged
+                    ).classes('flex flex-col p-1')#.props("disable")
+
+            # Plotly chart
+            blank = go.Figure(go.Scatter())
+            self.plot = ui.plotly(blank).classes("w-full")
+
+    def updateID(self, id=None):
+        """
+        Updates the plot title with the color assigned per the ID
+
+        Parameters
+        ----------
+        id : int, default=None
+            Optionally set the ID
+        """
+        if id is not None:
+            self.id = id
+
+        self.plot.figure.update_layout(
+            title={
+                "text": f"Spectra {self.id} @ ({self.x}, {self.y})",
+                "font": {
+                    "color": plotlyColor(self.id)
                 }
+            }
+        )
+
+        self.plot.update()
+
+    async def updateOptions(self):
+        """
+        Enables/disables radio options depending on the number of input files available
+
+        This is called every time the dropdown is opened so that it is always up to
+        date
+        """
+        script = f'''
+        const radioGroup = document.getElementById("c{self.styles.id}");
+        const radios = radioGroup.querySelectorAll('[role="radio"]');
+        '''
+        for i, style in enumerate(self.styles.options):
+            if self.isStyleValid(style):
+                script += f'''
+                radios[{i}].setAttribute('aria-disabled', 'false');
+                radios[{i}].classList.remove('disabled');
+                '''
+            else:
+                script += f'''
+                radios[{i}].setAttribute('aria-disabled', 'true');
+                radios[{i}].classList.add('disabled');
+                '''
+
+        ui.run_javascript(script)
+
+    async def close(self):
+        """
+        Closes this plot
+        """
+        await self.parent.delAnnotation(self.id)
+
+    async def build(self):
+        """
+        Retrieves the loaded data from the parent, selects this spectra's pixel, and
+        prepares the data for plotting
+        """
+        self.cache.clear()
+
+        for row in self.parent.inputs:
+            if (data := row.get("data")) is not None:
+                spectra = data.isel(x=self.x, y=self.y)
+                spectra = spectra.rename(wavelength='Wavelength')
+
+                # Remove minimum values
+                if self.trim.value:
+                    spectra = spectra.where(spectra != spectra.min())
+
+                spectra.name = "Reflectance"
+                df = spectra.to_dataframe()
+
+                # Only cache these columns (sometimes fwhm tags along)
+                df = df[["Wavelength", "Reflectance"]]
+
+                self.cache.append(df)
+
+        await self.draw()
+
+    def calcStyle(self):
+        """
+        Performs the calculations for the style options available
+
+        Returns
+        -------
+        list
+            The list of dataframes prepared for plotting
+        """
+        style = self.styles.value
+
+        if style == "Separate":
+            return self.cache
+
+        calc = self.cache[0].copy()
+        rfls = [df["Reflectance"] for df in self.cache]
+
+        if style == "Subtract":
+            calc["Reflectance"] = rfls[0] - rfls[1]
+
+        elif style == "% Difference":
+            a = rfls[0]
+            b = rfls[1]
+
+            calc["Reflectance"] = (a - b).abs() / ((a + b) / 2) * 100
+
+        elif style == "Average":
+            calc["Reflectance"] = sum(rfls) / len(rfls)
+
+        return [calc]
+
+    async def draw(self):
+        """
+        Plots the data with the set style
+        """
+        self.loading.visible = True
+
+        data = self.calcStyle()
+
+        fig = go.Figure()
+        for i, df in enumerate(data):
+            fig.add_trace(
+                trace = px.line(df,
+                    x = 'Wavelength',
+                    y = 'Reflectance',
+                ).data[0]
             )
 
-            plot = ui.plotly(fig).classes("w-full")
+        for i, trace in enumerate(fig.data):
+            trace.line.color = plotlyColor(i)
+
+        fig.update_layout(
+            height = 300,
+            margin = dict(l=0, r=0, t=30, b=0),
+            template = "plotly_dark",
+            paper_bgcolor = "rgba(0, 0, 0, 0)"
+        )
+
+        self.plot.update_figure(fig)
+
+        self.updateID()
+
+        self.loading.visible = False
+
+    def isStyleValid(self, style):
+        """
+        Checks if a selected style is valid given the data available
+
+        Parameters
+        ----------
+        style : str
+            Style mode to check validity
+        """
+        if style != "Separate":
+            count = len(self.cache)
+            if count < 2:
+                return False
+            if style in {"Subtract", "% Difference"} and count != 2:
+                return False
+
+        return True
+
+    async def styleChanged(self, style):
+        """
+        Intercepts the radio style change to check if the style is a valid option
+        If not, discards the change
+
+        Parameters
+        ----------
+        style : nicegui.events.ValueChangeEventArguments
+            Event triggered by the `styles` ui.radio
+        """
+        if not self.isStyleValid(style.value):
+            return self.styles.set_value("Separate")
+        await self.draw()
 
 
 class Config:
@@ -613,12 +1032,11 @@ class MultiPlotLUT:
 
         # Defaults
         self.quant = None
-        self.dim = None
+        self.dim = "None"
 
         with ui.card().classes("w-full border"):
-            with ui.column().classes("w-full") as self.column:
-                with ui.row().classes("w-full items-center"):
-
+            with ui.column().classes("w-full"):
+                with ui.row().classes("w-full items-center") as self.header:
                     self.main["select"] = ui.select(
                         label = "LUT File",
                         options = self.files,
@@ -662,7 +1080,15 @@ class MultiPlotLUT:
                     .classes("ml-auto") \
                     .tooltip("Removes this entire plot group")
 
-                self.ui = ui.plotly(multiplot()).classes("w-full")
+                # Relative wrapper to control layering
+                with ui.element().classes("relative w-full") as self.column:
+                    # Loading overlay
+                    with ui.card().classes("absolute inset-0 z-10 flex items-center justify-center bg-white/70") as self.loading:
+                        ui.spinner(size='xl')
+                    self.loading.visible = False
+
+                    # Plotly figure
+                    self.ui = ui.plotly(multiplot()).classes("w-full")
 
     @property
     def new(self):
@@ -677,7 +1103,7 @@ class MultiPlotLUT:
         return {
             "plot": self.blank,
             "lut": None,
-            "select": None
+            "select": None,
         }
 
     @property
@@ -693,7 +1119,7 @@ class MultiPlotLUT:
         """
         return go.Figure(go.Scatter())
 
-    def load(self, file):
+    async def load(self, file):
         """
         Loads a LUT dataset and stores it in the cache
 
@@ -708,6 +1134,8 @@ class MultiPlotLUT:
         xr.Dataset
             Loaded LUT dataset
         """
+        self.loading.visible = True
+
         if file not in self.cache:
             if Path(file).exists():
                 print(f"Loading given LUT: {file}")
@@ -722,6 +1150,8 @@ class MultiPlotLUT:
                 except Exception as e:
                     print(f"Failed to load, reason: {e}")
 
+        self.loading.visible = False
+
         return self.cache.get(file)
 
     def setOptions(self, *_):
@@ -732,14 +1162,14 @@ class MultiPlotLUT:
         for plot in self.plots:
             plot["select"].set_options(self.files)
 
-    def createSubplot(self):
+    async def createSubplot(self):
         """
         Adds a new subplot to the figure
         """
         plot = self.new
         self.plots.append(plot)
 
-        with self.column:
+        with self.header:
             with ui.row().classes("w-full items-center"):
                 plot["select"] = ui.select(
                     label = f"LUT File for Plot {len(self.plots)}",
@@ -754,12 +1184,12 @@ class MultiPlotLUT:
                 ).props("outline round").tooltip("Remove subplot").classes("ml-auto")
 
         # Shift to bottom of the card
-        self.ui.move(target_index=-1)
+        # self.ui.move(target_index=-1)
 
         # Update the figure with a blank
-        self.updateUI()
+        await self.updateUI()
 
-    def updateSubplot(self, plot, file):
+    async def updateSubplot(self, plot, file):
         """
         Updates a subplot with a new LUT input
 
@@ -770,18 +1200,18 @@ class MultiPlotLUT:
         file : str
             LUT file to load
         """
-        if (lut := self.load(file)) is None:
+        if (lut := await self.load(file)) is None:
             return
 
         plot["lut"] = lut
-        plot["plot"] = self.plot(
+        plot["plot"] = await self.plot(
             lut   = plot["lut"],
             quant = self.quant,
             dim   = self.dim
         )
-        self.updateUI()
+        await self.updateUI()
 
-    def deleteSubplot(self, plot):
+    async def deleteSubplot(self, plot):
         """
         Deletes a subplot and removes it from the UI
 
@@ -791,15 +1221,16 @@ class MultiPlotLUT:
             Plot data dict
         """
         i = self.plots.index(plot)
-        self.column.remove(i)
+        self.header.remove(i+5) # 5 to skip the primary header components
         self.plots.pop(i)
-        self.updateUI()
+
+        await self.updateUI()
 
         # Update labels for consistency
         for i, plot in enumerate(self.plots[1:]):
             plot["select"].props(f'label="LUT File for Plot {i+2}"')
 
-    def changeFile(self, file):
+    async def changeFile(self, file):
         """
         Changes the primary LUT dataset and updates the quantities list
 
@@ -811,7 +1242,7 @@ class MultiPlotLUT:
         self.quants.disable()
         self.dims.disable()
 
-        if (lut := self.load(file)) is None:
+        if (lut := await self.load(file)) is None:
             return
 
         self.main["lut"] = lut
@@ -825,7 +1256,7 @@ class MultiPlotLUT:
         # Reset the quant selection
         self.quants.set_value(None)
 
-    def changeQuant(self, quant):
+    async def changeQuant(self, quant):
         """
         Changes the selected quantity from the active main LUT file and updates the
         dimensions list
@@ -839,11 +1270,13 @@ class MultiPlotLUT:
 
         lut = self.main["lut"]
 
+        # Discover the available dims
         dims = []
         if quant in lut:
             dims = set(lut[quant].dims) - {"wl",}
 
-        self.dims.set_options(sorted(dims))
+        # Set them as the options, including "None" to average over all dims
+        self.dims.set_options(["None"] + sorted(dims))
 
         if dims:
             self.dims.enable()
@@ -851,9 +1284,12 @@ class MultiPlotLUT:
             self.dims.disable()
 
         # Attempt to re-plot with the last chosen dim
-        self.changeDim(self.dim)
+        if self.dim != self.dims.value:
+            self.dims.set_value(self.dim)
+        else:
+            await self.changeDim(self.dim)
 
-    def changeDim(self, dim):
+    async def changeDim(self, dim):
         """
         Changes the plotting dimension
 
@@ -866,15 +1302,15 @@ class MultiPlotLUT:
 
         # Update all plots
         for plot in self.plots:
-            plot["plot"] = self.plot(
+            plot["plot"] = await self.plot(
                 lut   = plot["lut"],
                 quant = self.quant,
                 dim   = self.dim
             )
 
-        self.updateUI()
+        await self.updateUI()
 
-    def plot(self, lut, quant, dim):
+    async def plot(self, lut, quant, dim):
         """
         Attempts to create a LUT plot. If it fails, returns a blank figure
 
@@ -892,25 +1328,33 @@ class MultiPlotLUT:
         go.Figure
             Either the plotted figure or a blank if it failed
         """
+        self.loading.visible = True
+
         try:
             data = lut[quant]
             dims = set(data.coords) - {"wl", dim}
-            mean = data.mean(dims, skipna=True)
-            mean = mean.rename(wl="Wavelength")
 
-            # Split each value of the dim into its own variable
-            mean = mean.to_dataset(dim)
-            df = mean.to_dataframe()
+            if dims:
+                mean = data.mean(dims, skipna=True)
+                data = mean.rename(wl="Wavelength")
+
+                # Split each value of the dim into its own variable
+                if dim != "None":
+                    data = data.to_dataset(dim)
+
+            df = data.to_dataframe()
 
             return px.line(df,
                 template = "plotly_dark",
-                labels = {"variable": dim}
+                labels = {"variable": str(dim)}
             )
         except Exception as e:
             print(f"Failed to plot {quant}[{dim}], reason: {e}")
             return self.blank
+        finally:
+            self.loading.visible = False
 
-    def updateUI(self):
+    async def updateUI(self):
         """
         Updates the GUI with a newly constructed multi-plot figure
         """
@@ -941,14 +1385,14 @@ class LUTs:
         with ui.scroll_area().classes("h-full w-full") as self.scroll:
             self.addPlotBtn = ui.button(
                 "Add New Independent Plot",
-                on_click = self.createPlot
+                on_click = self.asyncCreatePlot
             ).classes("w-full") \
             .props("outline")
 
         # Create an initial plot
         self.createPlot()
 
-    def setOptions(self, *_):
+    async def setOptions(self, *_):
         """
         Calls each MultiPlotLUT to set the file options
 
@@ -969,7 +1413,13 @@ class LUTs:
         # Move the button to the bottom
         self.addPlotBtn.move(target_index=-1)
 
-    def deletePlot(self, plot):
+    async def asyncCreatePlot(self):
+        """
+        Async wrapper for createPlot
+        """
+        self.createPlot()
+
+    async def deletePlot(self, plot):
         """
         Removes a plot group from the interface permanently
 
@@ -1171,7 +1621,7 @@ class Setup:
         self.parent = parent
 
         if WORKING_DIRS:
-            setWD = lambda e: self.directory.set_value(WORKING_DIRS[e.sender.text])
+            setWD = lambda e: self.search.set_value(WORKING_DIRS[e.sender.text])
             with ui.row():
                 for name, path in WORKING_DIRS.items():
                     if not Path(path).exists():
@@ -1179,12 +1629,9 @@ class Setup:
                         continue
                     ui.button(name, on_click=setWD)
 
-        # self.directory = ui.input("Working Directory",
-        #     validation = self.setIsofit,
-        # ).classes("w-full")
         with ui.row().classes("w-full items-center"):
             with ui.button("Set as Working Directory",
-                on_click = lambda: self.setIsofit(self.directory.value)
+                on_click = self.setWD
             ).classes("w-[15%]"):
                 with ui.tooltip():
                     ui.label("Set this path as the active working directory")
@@ -1192,8 +1639,8 @@ class Setup:
                     ui.label("Only do this on known directories as this is an expensive operation")
                     ui.label("Executing this on protected or excessively deep directories may crash this program's server")
 
-            self.directory = ui.input("Search",
-                validation = self.glob,
+            self.search = ui.input("Search",
+                on_change = self.glob
             ).classes("w-[83%]")
 
         self.preview = ui.column().classes("w-full")
@@ -1202,15 +1649,21 @@ class Setup:
         self.filter.visible = False
         self.directoryTree = ui.scroll_area().classes("w-full h-full")
 
-    def glob(self, path):
+    async def glob(self, path):
         """
-        TODO
+        Globs the filesystem at the current search path, placing directories before
+        files
 
         Parameters
         ----------
-        path : str
+        path : ValueChangeEventArguments
+            Event when the search string changes
         """
-        path = Path(path)
+        self.preview.clear()
+        with self.preview:
+            ui.spinner('dots', size='xl')
+
+        path = Path(path.value)
         if not path.exists():
             glob = path.parent.glob(f"{path.name}*")
         else:
@@ -1235,8 +1688,8 @@ class Setup:
         ]
 
         self.preview.clear()
-        if data:
-            with self.preview:
+        with self.preview:
+            if data:
                 ui.aggrid({
                     "columnDefs": [
                         {"field": "path"}
@@ -1247,50 +1700,69 @@ class Setup:
                 .on('cellClicked',
                     lambda event: self.appendSearch(event.args["value"])
                 )
+            else:
+                ui.icon("report_problem").tooltip("An error has occurred")
 
     def appendSearch(self, path):
-        current = Path(self.directory.value)
+        """
+        Appends a string to the current search string
+
+        Parameters
+        ----------
+        path : str
+            Path to append
+        """
+        current = Path(self.search.value)
         if not current.exists():
             current = current.parent
         new = (current / path).resolve()
 
-        # path = Path(f"{self.directory.value}/{path}").resolve()
-        self.directory.set_value(str(new))
+        self.search.set_value(str(new))
 
     async def reset(self, isofit=None):
         ...
 
-    def setIsofit(self, path):
+    async def setWD(self):
+        """
+        Sets the global IsofitWD object
+        """
         self.directoryTree.clear()
+        with self.directoryTree:
+            ui.spinner('dots', size='xl')
 
-        WD.reset(path, recursive=True)
+        WD.reset(self.search.value, recursive=True)
         self.parent.isofit = WD
 
         self.parent.toggleTabs(all=True)
 
+        # Recursively get the tree structure of the directory
+        data = WD.getTree(info=True)
+        data = toNiceGUITree(data)
+        data[0]["label"] = str(WD.path)
+
         # Set the output directory tree
+        self.directoryTree.clear()
         with self.directoryTree:
-            data = WD.getTree(info=True)
-            data = toNiceGUITree(data)
-            data[0]["label"] = str(WD.path)
+            if data:
+                # ui.label("Click on an output file below to jump to an interactive component for that file [Work in Progress]")
+                # ui.label("Detected paths:")
 
-            # ui.label("Click on an output file below to jump to an interactive component for that file [Work in Progress]")
-            # ui.label("Detected paths:")
+                self.tree = EnhancedTree(data, on_select=lambda e: self.navToFile(e)) \
+                .classes("border h-full w-full") \
+                .props("no-transition dense")
 
-            self.tree = EnhancedTree(data, on_select=lambda e: self.navToFile(e)) \
-            .classes("border h-full w-full") \
-            .props("no-transition dense")
+                self.tree.expand(["root"])
+                self.tree.add_slot('default-header', '''
+                    <span :props="props">{{ props.node.label }}</strong></span>
+                ''')
+                self.tree.add_slot('default-body', '''
+                    <span :props="props">{{ props.node.desc }}</span>
+                ''')
 
-            self.tree.expand(["root"])
-            self.tree.add_slot('default-header', '''
-                <span :props="props">{{ props.node.label }}</strong></span>
-            ''')
-            self.tree.add_slot('default-body', '''
-                <span :props="props">{{ props.node.desc }}</span>
-            ''')
-
-            self.filter.visible = True
-            self.filter.bind_value_to(self.tree, "filter")
+                self.filter.visible = True
+                self.filter.bind_value_to(self.tree, "filter")
+            else:
+                ui.icon("report_problem").tooltip("An error has occurred")
 
     def navToFile(self, event):
         """
@@ -1321,7 +1793,6 @@ class Setup:
                 else:
                     print("Cannot load files on the base")
 
-#%%
 
 class Tabs:
     isofit = None
@@ -1448,7 +1919,7 @@ def checkPorts(start : int, end : int = 100) -> None:
             print(f"All ports between {start}-{start+end} are in use")
 
 
-def launch(path=None, check=False, **kwargs):
+def launch(path=".", check=False, **kwargs):
     """
     Launches the NiceGUI server
 
@@ -1466,7 +1937,8 @@ def launch(path=None, check=False, **kwargs):
         checkPorts(kwargs.get("port", 8080))
 
     if path:
-        GUI.tabs["setup"].directory.set_value(path)
+        print(f"Setting path: {path}")
+        GUI.tabs["setup"].search.set_value(path)
 
     print("Launching")
     ui.run(**kwargs)
@@ -1493,6 +1965,3 @@ if __name__ == "__main__":
 elif __name__ == "__mp_main__":
     logging.basicConfig(level="DEBUG")
     launch()
-
-
-#%%
