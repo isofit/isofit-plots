@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import socket
+from asyncio import sleep
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,11 +21,13 @@ from nicegui import observables, run, ui
 
 from isofit.radiative_transfer import luts
 
+Logger = logging.getLogger("IsoNice")
+
 # TODO: This will source from isofit once the PR is accepted
 try:
     from isofit.utils.wd import IsofitWD, Loaders
 except:
-    logging.exception("Failed to load IsofitWD from ISOFIT, using fallback")
+    Logger.exception("Failed to load IsofitWD from ISOFIT, using fallback")
     from isoplots.isonice.wd import IsofitWD, Loaders
 
 # Global shared working directory
@@ -234,8 +237,9 @@ class Logs:
 
             self.populateLogs()
             self.populateLevels()
-        except Exception as e:
-            print(f"Failed to load logs: {e}")
+        except:
+            Logger.exception(f"Failed to load logs")
+
             self.logs = None
             with self.lines:
                 ui.chip(
@@ -470,16 +474,17 @@ class Spectra:
             Path to data file to load. If the path exists, loads directly; otherwise
             use IsofitWD to find and load
         """
+        Logger.debug(f"Loading {path}")
         if Path(path).exists():
             try:
                 return Loaders.envi(path)
             except:
-                logging.exception("Failed to load envi")
+                Logger.exception("Failed to load envi")
         else:
             try:
                 return WD.load(path=path)
             except:
-                logging.exception("Failed to load via WD")
+                Logger.exception("Failed to load via WD")
 
     async def loadFile(self, file, row):
         """
@@ -498,7 +503,7 @@ class Spectra:
         row["data"] = await run.io_bound(self.load, path=file)
 
         if row["data"] is None:
-            print("No data available, returning")
+            Logger.error("No data available, returning")
             self.loading.visible = False
             return
 
@@ -601,8 +606,8 @@ class Spectra:
         """
         try:
             img = px.imshow(image, template="plotly_dark")
-        except Exception as e:
-            print(f"Failed to plot spectra image, reason: {e}")
+        except:
+            Logger.exception(f"Failed to plot spectra image")
             img = go.Figure()
 
         self.setImage(img)
@@ -681,7 +686,6 @@ class Spectra:
         event : nicegui.events.GenericEventArguments
             Event triggered when the image is clicked
         """
-        print(type(event))
         # Images will only ever have 1 point returned
         point = event.args["points"][0]
         data = point["data"]
@@ -837,8 +841,8 @@ class SpectraPlot:
                     df = df[["Wavelength", "Reflectance"]]
 
                     self.cache.append(df)
-                except Exception as e:
-                    print(f"Failed to create a spectra plot for {row['file']}, reason: {e}")
+                except:
+                    Logger.exception(f"Failed to create a spectra plot for {row['file']}")
 
         await self.draw()
 
@@ -1168,19 +1172,18 @@ class MultiPlotLUT:
         """
         self.loading.visible = True
 
+        Logger.debug(f"Loading path: {file}")
         if file not in self.cache:
             if Path(file).exists():
-                print(f"Loading given LUT: {file}")
                 try:
                     self.cache[file] = luts.load(file).unstack()
                 except Exception as e:
-                    print(f"Failed to load, reason: {e}")
+                    Logger.exception(f"Failed to load via luts.py")
             else:
-                print(f"Loading LUT from WD: {file}")
                 try:
                     self.cache[file] = WD.load(path=file).unstack()
                 except Exception as e:
-                    print(f"Failed to load, reason: {e}")
+                    Logger.exception(f"Failed to load via WD")
 
         self.loading.visible = False
 
@@ -1380,8 +1383,8 @@ class MultiPlotLUT:
                 template = "plotly_dark",
                 labels = {"variable": str(dim)}
             )
-        except Exception as e:
-            print(f"Failed to plot {quant}[{dim}], reason: {e}")
+        except:
+            Logger.exception(f"Failed to plot {quant}[{dim}]")
             return self.blank
         finally:
             self.loading.visible = False
@@ -1473,14 +1476,14 @@ class LUTs:
         self.files.sort()
 
 
-def toNiceGUITree(tree, *, path=None, nodes=None):
+def toNiceGUITree(tree=None, *, path=None, nodes=None):
     """
     Recursively converts an IsofitWD tree (with info) into a NiceGUI-compatible data
     structure for the tree component
 
     Parameters
     ----------
-    tree : dict
+    tree : dict, default=None
         Tree object created by IsofitWD.getTree(info=True)
     nodes : list, default=None
         Converted nodes for the tree component, this likely should be left as the
@@ -1491,6 +1494,9 @@ def toNiceGUITree(tree, *, path=None, nodes=None):
     nodes : list
         Converted nodes for the tree component
     """
+    if tree is None:
+        tree = WD.getTree(info=True)
+
     if nodes is None:
         nodes = [{"id": "root", "desc": None, "children": []}]
         toNiceGUITree(tree, path=".", nodes=nodes[-1]["children"])
@@ -1514,6 +1520,7 @@ def toNiceGUITree(tree, *, path=None, nodes=None):
                     "label": file.name,
                     "desc" : file.info
                 })
+
     return nodes
 
 
@@ -1657,7 +1664,7 @@ class Setup:
             with ui.row():
                 for name, path in WORKING_DIRS.items():
                     if not Path(path).exists():
-                        print(f"Path not found: {path}")
+                        Logger.error(f"Path not found: {path}")
                         continue
                     ui.button(name, on_click=setWD)
 
@@ -1758,19 +1765,37 @@ class Setup:
         """
         Sets the global IsofitWD object
         """
+        path = self.search.value
+
         self.directoryTree.clear()
+        self.filter.visible = False
+
         with self.directoryTree:
-            ui.spinner('dots', size='xl')
+            with ui.stepper().props("vertical").classes("w-full") as stepper:
+                with ui.step(f"Setting path: {path}"):
+                    ui.skeleton().classes("w-full")
+                with ui.step("Recursively searching for ISOFIT products"):
+                    ui.skeleton().classes("w-full")
+                    ui.label("Depending on the depth of the chosen directory, this may take a moment")
+                with ui.step("Building directory tree"):
+                    ui.skeleton().classes("w-full")
+                    ui.label("This typically takes the longest to parse the directory tree into a readable format")
+                with ui.step("Rendering UI"):
+                    ui.skeleton().classes("w-full")
 
-        WD.reset(self.search.value, recursive=True)
+        stepper.next() # Setting path, done
+
+        await run.io_bound(WD.reset, path, recursive=True)
         self.parent.isofit = WD
-
         self.parent.toggleTabs(all=True)
+        stepper.next() # Recursively search, done
 
-        # Recursively get the tree structure of the directory
-        data = WD.getTree(info=True)
-        data = toNiceGUITree(data)
+        data = await run.io_bound(toNiceGUITree)
         data[0]["label"] = str(WD.path)
+        stepper.next() # Building tree, done
+
+        # Makes the UI feel more responsive by giving a slight pause after the last step
+        await sleep(1)
 
         # Set the output directory tree
         self.directoryTree.clear()
@@ -1823,7 +1848,7 @@ class Setup:
 
                     # self.parent.navToFile(dir, path)
                 else:
-                    print("Cannot load files on the base")
+                    Logger.error("Cannot load files on the base")
 
 
 class Tabs:
@@ -1943,12 +1968,12 @@ def checkPorts(start : int, end : int = 100) -> None:
     """
     if not portAvail(start):
         for port in range(start+1, start+end):
-            print(f"Checking {port}")
+            Logger.info(f"Checking {port}")
             if portAvail(port):
-                print(f"Port {start} is already in use, recommend using --port {port}")
+                Logger.warning(f"Port {start} is already in use, recommend using --port {port}")
                 break
         else:
-            print(f"All ports between {start}-{start+end} are in use")
+            Logger.error(f"All ports between {start}-{start+end} are in use")
 
 
 def launch(path=".", check=False, **kwargs):
@@ -1965,14 +1990,14 @@ def launch(path=".", check=False, **kwargs):
         Additional key-word arguments passed directly to ui.run
     """
     if check:
-        print("Checking ports")
+        Logger.info("Checking ports")
         checkPorts(kwargs.get("port", 8080))
 
     if path:
-        print(f"Setting path: {path}")
+        Logger.info(f"Setting path: {path}")
         GUI.tabs["setup"].search.set_value(path)
 
-    print("Launching")
+    Logger.info("Launching")
     ui.run(**kwargs)
 
 
