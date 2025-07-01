@@ -324,10 +324,6 @@ class Spectra:
 
                     self.createFileRow(main=True)
 
-
-                # Generic placeholder figure
-                self.setImage(go.Figure())
-
                 with ui.element().classes("relative w-full") as self.column:
                     # Loading overlay
                     with ui.card().classes("absolute inset-0 z-10 flex items-center justify-center bg-white/70") as self.loading:
@@ -335,7 +331,7 @@ class Spectra:
                     self.loading.visible = False
 
                     # Plotly figure
-                    self.plot = ui.plotly(self.img).classes('w-full h-full')
+                    self.plot = ui.plotly(go.Figure()).classes('w-full h-full')
 
                 # Override the event to delete the source string which crashes the server when the image is too large
                 self.plot.on('plotly_click', js_handler="""
@@ -398,9 +394,9 @@ class Spectra:
                         .style(f"--q-primary: {color};")
                     ):
                         with ui.tooltip():
-                            ui.label("This file will be the image plotted below")
+                            ui.label("Click on the button to the left of each file input to select that data to be the image plot")
                             ui.label("Changes to the settings will use this data")
-                            ui.label("Additional files must be the same X/Y/Wavelength shape to plot correctly")
+                            ui.label("Additional files must be the same X/Y/Wavelength shape to plot correctly. There are no enforcement of this, however")
                             ui.label("Some plotting features are only available if certain requirements are met:")
                             ui.label("  - Subtraction, % Difference : Only two data files are loaded")
                             ui.label("  - Average : Two or more data files are loaded")
@@ -449,7 +445,7 @@ class Spectra:
         self.spectras.clear()
 
         self.files.clear()
-        self.files += WD.find("rfl", all=True, exc=["hdr", "subs"])
+        self.files += await run.io_bound(WD.find, "rfl", all=True, exc=["hdr", "subs"])
         self.files.sort()
 
         self.inputs[0]["select"].set_value(self.files[0])
@@ -507,7 +503,7 @@ class Spectra:
             self.loading.visible = False
             return
 
-        if row == self.inputs[0]:
+        if row == self.active:
             self.scroll.clear()
             self.traces.clear()
             self.spectras.clear()
@@ -547,6 +543,38 @@ class Spectra:
 
         await self.createImage()
 
+    def buildImage(self):
+        """
+        """
+        fig = go.Figure()
+
+        if self.active:
+            try:
+                bands = [self.r.value, self.g.value, self.b.value]
+                rgb = self.active["data"].sel(band=bands).transpose("y", "x", "band")
+
+                if self.brighten.value:
+                    rgb /= rgb.max(["x", "y"])
+
+                # Convert to pixel coords for easier pixel selection
+                rgb["x"] = range(rgb.x.size)
+                rgb["y"] = range(rgb.y.size)
+
+                fig = px.imshow(rgb, template="plotly_dark")
+            except:
+                Logger.exception(f"Failed to plot spectra image")
+
+        for trace in self.traces:
+            fig.add_trace(trace)
+
+        fig.update_layout(
+            margin = dict(l=0, r=20, t=0, b=0),
+            showlegend = False,
+            paper_bgcolor = "rgba(0, 0, 0, 0)",
+        )
+
+        return fig
+
     async def createImage(self):
         """
         Creates the data for the image and passes it along to the frontend
@@ -555,22 +583,8 @@ class Spectra:
         """
         self.loading.visible = True
 
-        bands = [self.r.value, self.g.value, self.b.value]
-        rgb = self.active["data"].sel(band=bands).transpose("y", "x", "band")
-
-        if self.brighten.value:
-            rgb /= rgb.max(["x", "y"])
-
-        # Convert to pixel coords for easier pixel selection
-        rgb["x"] = range(rgb.x.size)
-        rgb["y"] = range(rgb.y.size)
-
-        await self.plotImage(rgb)
-
-        # Re-add any traces that may still exist
-        for trace in self.traces:
-            self.img.add_trace(trace)
-        self.plot.update()
+        self.img = await run.io_bound(self.buildImage)
+        self.plot.update_figure(self.img)
 
         self.loading.visible = False
 
@@ -746,7 +760,6 @@ class SpectraPlot:
         with ui.card().classes("relative w-full p-2"):
             with ui.card().classes("absolute inset-0 z-20 flex items-center justify-center bg-white/70") as self.loading:
                 ui.spinner(size='xl')
-            self.loading.visible = False
 
             # Dropdown button in top-left corner
             with ui.button(icon="more_horiz", on_click=self.updateOptions).classes("absolute top-0 left-0 z-10").props("outline dense"):
@@ -1155,7 +1168,7 @@ class MultiPlotLUT:
         """
         return go.Figure(go.Scatter())
 
-    async def load(self, file):
+    def load(self, file):
         """
         Loads a LUT dataset and stores it in the cache
 
@@ -1277,7 +1290,8 @@ class MultiPlotLUT:
         self.quants.disable()
         self.dims.disable()
 
-        if (lut := await self.load(file)) is None:
+        lut = await run.io_bound(self.load, file)
+        if lut is None:
             return
 
         self.main["lut"] = lut
@@ -1472,7 +1486,7 @@ class LUTs:
         Resets the the file options when the WD changes
         """
         self.files.clear()
-        self.files += WD.find("lut/.nc", all=True)
+        self.files += await run.io_bound(WD.find, "lut/.nc", all=True)
         self.files.sort()
 
 
@@ -1795,7 +1809,7 @@ class Setup:
         stepper.next() # Building tree, done
 
         # Makes the UI feel more responsive by giving a slight pause after the last step
-        await sleep(1)
+        await sleep(0.5)
 
         # Set the output directory tree
         self.directoryTree.clear()
@@ -1871,10 +1885,6 @@ class Tabs:
     reset = {}
 
     def __init__(self):
-        with ui.dialog() as self.loading:
-            # self.loading.on("click", lambda _: ...)
-            ui.spinner(size="lg")
-
         with ui.splitter(value=5).classes("w-full h-full") as splitter:
             with splitter.before:
                 with ui.tabs().props('vertical').classes('w-full h-full') as tabs:
@@ -1898,14 +1908,10 @@ class Tabs:
         self.toggleTabs()
 
     async def tabSelected(self, event):
-        self.loading.open()
-
         tab = event.value
         if self.reset[tab]:
             self.reset[tab] = False
             await self.tabs[tab].reset(self.isofit)
-
-        self.loading.close()
 
     def resetTabs(self):
         for tab in self.tabs:
