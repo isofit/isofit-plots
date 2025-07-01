@@ -657,10 +657,6 @@ class Logs(FileFinder):
         """
         super().__init__(*args, **kwargs)
 
-        files = self.getFlat()
-        if files:
-            self.file = files[0]
-
         # fmt: off
         #                   # Source | Purpose
         self.lines    = []  # build  | The formatted lines (end result of parse->filter->build)
@@ -671,6 +667,15 @@ class Logs(FileFinder):
         self.filtered = []  # filter | Lines passing the filter criteria of selected
         self.selected = {}  # parse  | Turn logging levels on/off for the build function
         # fmt: on
+
+    @cached_property
+    def file(self):
+        """
+        Retrieves the first found log file
+        """
+        files = self.getFlat()
+        if files:
+            return files[0]
 
     def load(self, *, path=None, ifin=None, find=None, match=None):
         """

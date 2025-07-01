@@ -281,6 +281,7 @@ class Spectra:
         """
         self.parent = parent
 
+        self.active = None # Active row used for image plotting
         self.inputs = [] # Tracks input rows
         self.traces = [] # Tracks annotations
         self.spectras = [] # SpectraPlot objects
@@ -368,10 +369,13 @@ class Spectra:
 
         with self.header:
             with ui.row().classes("w-full"):
-                row["colorBtn"] = ui.button(icon="show_chart") \
-                .props("dense outline") \
+                row["colorBtn"] = ui.button(
+                    icon = "show_chart",
+                    on_click = lambda e: self.setActive(row)
+                ).props("dense outline") \
                 .classes(f"h-full") \
-                .style(f"--q-primary: {color};")
+                .style(f"--q-primary: {color};") \
+                .tooltip("Set this data as the image")
 
                 row["select"] = ui.select(
                     options = self.files,
@@ -381,6 +385,9 @@ class Spectra:
                 ).classes("flex-1").props("dense")
 
                 if main:
+                    self.active = row
+                    row["colorBtn"].icon = "image"
+
                     with (ui.button(icon="question_mark")
                         .classes("h-full")
                         .props("dense outline")
@@ -487,6 +494,7 @@ class Spectra:
         """
         self.loading.visible = True
 
+        row["file"] = file
         row["data"] = await run.io_bound(self.load, path=file)
 
         if row["data"] is None:
@@ -513,6 +521,27 @@ class Spectra:
 
             self.loading.visible = False
 
+    async def setActive(self, row):
+        """
+        Sets the active row which is used for plotting the image
+
+        Parameters
+        ----------
+        row : dict
+            Input row to set as the active row
+        """
+        self.active = row
+
+        # Update icons
+        row["colorBtn"].icon = "image"
+        for data in self.inputs:
+            if data == row:
+                data["colorBtn"].icon = "image"
+            else:
+                data["colorBtn"].icon = "show_chart"
+
+        await self.createImage()
+
     async def createImage(self):
         """
         Creates the data for the image and passes it along to the frontend
@@ -522,7 +551,7 @@ class Spectra:
         self.loading.visible = True
 
         bands = [self.r.value, self.g.value, self.b.value]
-        rgb = self.inputs[0]["data"].sel(band=bands).transpose("y", "x", "band")
+        rgb = self.active["data"].sel(band=bands).transpose("y", "x", "band")
 
         if self.brighten.value:
             rgb /= rgb.max(["x", "y"])
@@ -793,20 +822,23 @@ class SpectraPlot:
 
         for row in self.parent.inputs:
             if (data := row.get("data")) is not None:
-                spectra = data.isel(x=self.x, y=self.y)
-                spectra = spectra.rename(wavelength='Wavelength')
+                try:
+                    spectra = data.isel(x=self.x, y=self.y)
+                    spectra = spectra.rename(wavelength='Wavelength')
 
-                # Remove minimum values
-                if self.trim.value:
-                    spectra = spectra.where(spectra != spectra.min())
+                    # Remove minimum values
+                    if self.trim.value:
+                        spectra = spectra.where(spectra != spectra.min())
 
-                spectra.name = "Reflectance"
-                df = spectra.to_dataframe()
+                    spectra.name = "Reflectance"
+                    df = spectra.to_dataframe()
 
-                # Only cache these columns (sometimes fwhm tags along)
-                df = df[["Wavelength", "Reflectance"]]
+                    # Only cache these columns (sometimes fwhm tags along)
+                    df = df[["Wavelength", "Reflectance"]]
 
-                self.cache.append(df)
+                    self.cache.append(df)
+                except Exception as e:
+                    print(f"Failed to create a spectra plot for {row['file']}, reason: {e}")
 
         await self.draw()
 
