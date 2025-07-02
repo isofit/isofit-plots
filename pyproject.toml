@@ -46,4 +46,4 @@ repository = "http://github.com/isofit/isofit-plots"
 isoplots = "isoplots:__main__.cli"
 
 [project.entry-points."xarray.backends"]
-envi = "isoplots.isonice.wd:EnviBackendEntrypoint"
+envi = "isoplots.isonice.utils.wd:EnviBackendEntrypoint"
