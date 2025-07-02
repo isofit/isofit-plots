@@ -22,9 +22,8 @@ class Resources:
         units : float, default=1024**3
             Units to display as. Defaults to GB
         """
-        self.interval = 2
+        self.interval = interval
         self.units = units or 1024**3
-        print(self.units)
 
         sys = psutil.virtual_memory()
         self.total = sys.total / self.units
