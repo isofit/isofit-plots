@@ -1,15 +1,3 @@
-.hide-header .ag-header {
-    display: none;
-}
-
-.nicegui-content {
-    padding: 0;
-}
-
-.flex-grow .q-field__control {
-    height: 100%;
-}
-
 .jse-theme-dark {
   --jse-theme: dark;
 

@@ -13,9 +13,9 @@ class CLI(click.MultiCommand):
     """
     def _load_modules(self):
         from isoplots.plots import Modules
-        from isoplots.isonice import browser
+        from isoplots.isonice import app
 
-        Modules["browser"] = browser
+        Modules["browser"] = app
 
         return Modules
 
