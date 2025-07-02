@@ -4,11 +4,12 @@ Usage:
     2. python isonice/isofit.py
     3. Acknowledge this is a WORK IN PROGRESS
 """
+import configparser
 import json
 import logging
 import re
 import socket
-from asyncio import sleep
+from asyncio import create_task, sleep
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,10 +18,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 import xarray as xr
 
-from nicegui import observables, run, ui
+from nicegui import app, observables, run, ui
 
 from isofit.radiative_transfer import luts
 
+Config = configparser.ConfigParser()
 Logger = logging.getLogger("IsoNice")
 
 # TODO: This will source from isofit once the PR is accepted
@@ -166,11 +168,6 @@ ui.add_head_html('''
 
     </style>
 ''')
-
-# Optional hard-coded output directories which will be added as buttons to quickly switch/load them
-WORKING_DIRS = {
-    # "Name": "/path/to/set"
-}
 
 
 def plotlyColor(i):
@@ -434,6 +431,8 @@ class Spectra:
         for spectra in self.spectras:
             await spectra.build()
 
+        await self.setActive(self.inputs[0])
+
         self.loading.visible = False
 
     async def reset(self, *_):
@@ -448,7 +447,8 @@ class Spectra:
         self.files += await run.io_bound(WD.find, "rfl", all=True, exc=["hdr", "subs"])
         self.files.sort()
 
-        self.inputs[0]["select"].set_value(self.files[0])
+        if self.files:
+            self.inputs[0]["select"].set_value(self.files[0])
 
     async def resetImage(self):
         """
@@ -956,7 +956,7 @@ class SpectraPlot:
         await self.draw()
 
 
-class Config:
+class Configs:
     data = None
 
     def __init__(self, parent):
@@ -1248,7 +1248,8 @@ class MultiPlotLUT:
         file : str
             LUT file to load
         """
-        if (lut := await self.load(file)) is None:
+        lut = await run.io_bound(self.load, file)
+        if lut is None:
             return
 
         plot["lut"] = lut
@@ -1673,19 +1674,12 @@ class Setup:
         """
         self.parent = parent
 
-        if WORKING_DIRS:
-            setWD = lambda e: self.search.set_value(WORKING_DIRS[e.sender.text])
-            with ui.row():
-                for name, path in WORKING_DIRS.items():
-                    if not Path(path).exists():
-                        Logger.error(f"Path not found: {path}")
-                        continue
-                    ui.button(name, on_click=setWD)
+        self.pathBtns = ui.button_group().props("outline").classes("w-full")
 
         with ui.row().classes("w-full items-center"):
             with ui.button("Set as Working Directory",
                 on_click = self.setWD
-            ).classes("w-[15%]"):
+            ).props("outline"):
                 with ui.tooltip():
                     ui.label("Set this path as the active working directory")
                     ui.label("This will recursively search for ISOFIT products")
@@ -1694,13 +1688,29 @@ class Setup:
 
             self.search = ui.input("Search",
                 on_change = self.glob
-            ).classes("w-[83%]")
+            ).classes("flex-grow")
 
         self.preview = ui.column().classes("w-full")
 
         self.filter = ui.input("filter").classes("w-full")
         self.filter.visible = False
         self.directoryTree = ui.scroll_area().classes("w-full h-full")
+        self.stepper()
+
+    def addPathButtons(self):
+        """
+        """
+        setWD = lambda e: self.search.set_value(Config["Paths"][e.sender.text])
+
+        self.pathBtns.clear()
+        if "Paths" in Config:
+            with self.pathBtns:
+                for name, path in Config["Paths"].items():
+                    if not Path(path).exists():
+                        Logger.error(f"Path not found: {path}")
+                        continue
+
+                    ui.button(name, on_click=setWD).props("outline").classes("flex-grow")
 
     async def glob(self, path):
         """
@@ -1772,36 +1782,56 @@ class Setup:
 
         self.search.set_value(str(new))
 
-    async def reset(self, isofit=None):
-        ...
-
-    async def setWD(self):
+    def stepper(self):
         """
-        Sets the global IsofitWD object
-        """
-        path = self.search.value
+        Leverages a NiceGUI Stepper to provide loading information
 
+        Returns
+        -------
+        stepper : ui.stepper
+            Stepper object
+        """
         self.directoryTree.clear()
-        self.filter.visible = False
-
         with self.directoryTree:
             with ui.stepper().props("vertical").classes("w-full") as stepper:
-                with ui.step(f"Setting path: {path}"):
-                    ui.skeleton().classes("w-full")
+                with ui.step(f"Setting path"):
+                    ui.label("Select a path above to get started")
+                    ui.label("Having an active working directory simplifies many of the UI features")
+                    ui.label("Alternatively, select tabs on the left and manually input products")
+                    ui.label("While processing a path, the tabs will be disabled to protect against thread race conditions")
                 with ui.step("Recursively searching for ISOFIT products"):
                     ui.skeleton().classes("w-full")
                     ui.label("Depending on the depth of the chosen directory, this may take a moment")
                 with ui.step("Building directory tree"):
                     ui.skeleton().classes("w-full")
                     ui.label("This typically takes the longest to parse the directory tree into a readable format")
+                    ui.label("Please be patient, there is no progress indicator but it is working")
+                    ui.label("If this takes more than two minutes, please open an issue on the repository with a copy of your terminal logs")
                 with ui.step("Rendering UI"):
                     ui.skeleton().classes("w-full")
 
+        return stepper
+
+    async def reset(self, *_):
+        """
+        """
+        self.addPathButtons()
+
+    async def setWD(self):
+        """
+        Sets the global IsofitWD object
+        """
+        # Disable buttons while loading
+        self.parent.toggleTabs()
+
+        path = self.search.value
+        self.filter.visible = False
+
+        stepper = self.stepper()
         stepper.next() # Setting path, done
 
         await run.io_bound(WD.reset, path, recursive=True)
-        self.parent.isofit = WD
-        self.parent.toggleTabs(all=True)
+        self.parent.resetTabs()
         stepper.next() # Recursively search, done
 
         data = await run.io_bound(toNiceGUITree)
@@ -1810,6 +1840,9 @@ class Setup:
 
         # Makes the UI feel more responsive by giving a slight pause after the last step
         await sleep(0.5)
+
+        # Re-enable the tabs
+        self.parent.toggleTabs()
 
         # Set the output directory tree
         self.directoryTree.clear()
@@ -1866,81 +1899,67 @@ class Setup:
 
 
 class Tabs:
-    isofit = None
-
+    disabled = False
     default = "setup"
-    valid = {
-        "config" : False,
-        "logs"   : False,
-        "spectra": False,
-        "luts"   : False,
-    }
+    reset = {}
     tabs = {
         "setup"  : Setup,
-        "config" : Config,
-        "logs"   : Logs,
+        # "config" : Configs,
+        # "logs"   : Logs,
         "spectra": Spectra,
         "luts"   : LUTs,
     }
-    reset = {}
 
     def __init__(self):
         with ui.splitter(value=5).classes("w-full h-full") as splitter:
             with splitter.before:
                 with ui.tabs().props('vertical').classes('w-full h-full') as tabs:
-                    self.btns = {
+                    self.buttons = {
                         "setup"  : ui.tab('setup',   icon='home'),
-                        "config" : ui.tab('config',  icon='settings'),
-                        "logs"   : ui.tab('logs',    icon='density_small'),
+                        # "config" : ui.tab('config',  icon='settings'),
+                        # "logs"   : ui.tab('logs',    icon='density_small'),
                         "spectra": ui.tab('spectra', icon='show_chart'),
                         "luts"   : ui.tab('luts',    icon='ssid_chart'),
                     }
             with splitter.after:
-                self.pnls = {}
-
-                with ui.tab_panels(tabs, value=self.btns[self.default], on_change=self.tabSelected).classes('w-full h-full') as self.panels:
-                    with self.panels:
-                        for name, btn in self.btns.items():
-                            with ui.tab_panel(btn) as self.pnls[name]:
-                                # Initialize the objects
-                                self.tabs[name] = self.tabs[name](self)
-
-        self.toggleTabs()
+                with ui.tab_panels(tabs, value=self.buttons[self.default], on_change=self.tabSelected).classes('w-full h-full'):
+                    for name, btn in self.buttons.items():
+                        with ui.tab_panel(btn):
+                            # Initialize the objects
+                            self.tabs[name] = self.tabs[name](self)
 
     async def tabSelected(self, event):
-        tab = event.value
-        if self.reset[tab]:
-            self.reset[tab] = False
-            await self.tabs[tab].reset(self.isofit)
+        """
+        Awaits the tab.reset task upon selection
+        """
+        await self.tabs[event.value].resetTask
 
     def resetTabs(self):
-        for tab in self.tabs:
-            self.reset[tab] = True
-
-    def toggleTabs(self, all=None):
         """
-        Enables/Disables a tab if it is set as valid or not
+        Resets all tabs by cancelling any running task and restarting
         """
-        # Tabs are always reset when this function is called
-        self.resetTabs()
+        for tab, obj in self.tabs.items():
+            if hasattr(obj, "resetTask"):
+                obj.resetTask.cancel()
+            obj.resetTask = create_task(obj.reset())
 
-        # for name, valid in self.valid.items():
-        #     if all is not None:
-        #         valid = all
-        #
-        #     tab = self.pnls[name]
-        #     btn = self.btns[name]
-        #     if valid:
-        #         btn.enable()
-        #         tab.enable()
-        #         tab.classes(remove="disabled")
-        #     else:
-        #         btn.disable()
-        #         tab.disable()
-        #         tab.classes(add="disabled")
+    def toggleTabs(self):
+        """
+        Toggles the disabled class of the tab buttons
+        """
+        for name in self.tabs:
+            btn = self.buttons[name]
+
+            if self.disabled:
+                btn.enable()
+            else:
+                btn.disable()
+
+        self.disabled = not self.disabled
 
 
 GUI = Tabs()
+app.on_startup(GUI.resetTabs)
 
 
 def portAvail(port: int) -> bool:
@@ -1982,7 +2001,7 @@ def checkPorts(start : int, end : int = 100) -> None:
             Logger.error(f"All ports between {start}-{start+end} are in use")
 
 
-def launch(path=".", check=False, **kwargs):
+def launch(path=".", config=None, check=False, **kwargs):
     """
     Launches the NiceGUI server
 
@@ -2003,13 +2022,23 @@ def launch(path=".", check=False, **kwargs):
         Logger.info(f"Setting path: {path}")
         GUI.tabs["setup"].search.set_value(path)
 
+    if config is None:
+        config = Path(__file__).parent / "paths.ini"
+
+    if Path(config).exists():
+        Logger.info(f"Reading config: {config}")
+        Config.read(config)
+
+        GUI.tabs["setup"].addPathButtons()
+
     Logger.info("Launching")
     ui.run(**kwargs)
 
 
 @click.command()
 @click.option("-p", "--path", default=".", help="Working directory to initially load with")
-@click.option("-c", "--check", default=False, is_flag=True, help="Checks for an open port up to 100 after the given port. May cause a delay in startup")
+@click.option("-c", "--config", help="")
+@click.option("--check", default=False, is_flag=True, help="Checks for an open port up to 100 after the given port. May cause a delay in startup")
 @click.option("--port", type=int, default=8080, help="Port to use. Defaults to 8080")
 @click.option("-r", "--reload", default=False, is_flag=True, help="Enable hot-reloading -- only available if executing the browser.py script directly")
 def cli(**kwargs):
@@ -2028,3 +2057,6 @@ if __name__ == "__main__":
 elif __name__ == "__mp_main__":
     logging.basicConfig(level="DEBUG")
     launch()
+
+
+#%%
