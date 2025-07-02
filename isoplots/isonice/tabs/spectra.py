@@ -14,9 +14,9 @@ from nicegui import (
 
 from isoplots.isonice import (
     WD,
-    Loaders,
-    utils
+    Loaders
 )
+from isoplots.isonice.utils import plots
 
 
 Logger = logging.getLogger("Spectra")
@@ -66,7 +66,7 @@ class Spectra:
 
             # Plotly chart
             blank = go.Figure(go.Scatter())
-            self.plot = ui.plotly(utils.blank()).classes("w-full")
+            self.plot = ui.plotly(plots.blank()).classes("w-full")
 
     def updateID(self, id=None):
         """
@@ -84,7 +84,7 @@ class Spectra:
             title={
                 "text": f"Spectra {self.id} @ ({self.x}, {self.y})",
                 "font": {
-                    "color": utils.plotlyColor(self.id)
+                    "color": plots.plotlyColor(self.id)
                 }
             }
         )
@@ -200,7 +200,7 @@ class Spectra:
             )
 
         for i, trace in enumerate(fig.data):
-            trace.line.color = utils.plotlyColor(i)
+            trace.line.color = plots.plotlyColor(i)
 
         fig.update_layout(
             height = 300,
@@ -340,7 +340,7 @@ class Tab:
         """
         row = {}
         self.inputs.append(row)
-        color = utils.plotlyColor(len(self.inputs)-1)
+        color = plots.plotlyColor(len(self.inputs)-1)
 
         with self.header:
             with ui.row().classes("w-full"):
@@ -401,7 +401,7 @@ class Tab:
 
         # Update colors of buttons
         for j, row in enumerate(self.inputs[i:]):
-            color = utils.plotlyColor(i+j)
+            color = plots.plotlyColor(i+j)
             row["colorBtn"].style(f"--q-primary: {color};")
             row["removeBtn"].style(f"--q-primary: {color};")
 

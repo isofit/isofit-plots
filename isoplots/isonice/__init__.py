@@ -5,7 +5,7 @@ try:
     from isofit.utils.wd import IsofitWD, Loaders
 except:
     print("Using Isoplots for WD")
-    from isoplots.isonice.wd import IsofitWD, Loaders
+    from isoplots.isonice.utils.wd import IsofitWD, Loaders
 
 # Globally shared single-states
 Config = configparser.ConfigParser()

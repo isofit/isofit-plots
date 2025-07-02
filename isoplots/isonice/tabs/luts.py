@@ -12,10 +12,8 @@ from nicegui import (
 )
 
 from isofit.radiative_transfer import luts
-from isoplots.isonice import (
-    WD,
-    utils
-)
+from isoplots.isonice import WD
+from isoplots.isonice.utils import plots
 
 
 Logger = logging.getLogger("LUTs")
@@ -113,7 +111,7 @@ class MultiPlotLUT:
                     self.loading.visible = False
 
                     # Plotly figure
-                    self.ui = ui.plotly(utils.multiplot()).classes("w-full")
+                    self.ui = ui.plotly(plots.multiplot()).classes("w-full")
 
     @property
     def new(self):
@@ -126,7 +124,7 @@ class MultiPlotLUT:
             Default values for a new plot
         """
         return {
-            "plot": utils.blank(),
+            "plot": plots.blank(),
             "lut": None,
             "select": None,
         }
@@ -363,7 +361,7 @@ class MultiPlotLUT:
             )
         except:
             Logger.exception(f"Failed to plot {quant}[{dim}]")
-            return utils.blank()
+            return plots.blank()
         finally:
             self.loading.visible = False
 
@@ -371,9 +369,11 @@ class MultiPlotLUT:
         """
         Updates the GUI with a newly constructed multi-plot figure
         """
-        plots = [plot["plot"] for plot in self.plots]
-        fig = utils.multiplot(plots)
-        self.ui.update_figure(fig)
+        self.ui.update_figure(
+            plots.multiplot(
+                [plot["plot"] for plot in self.plots]
+            )
+        )
 
 
 class Tab:

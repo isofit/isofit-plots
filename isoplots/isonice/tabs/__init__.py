@@ -3,9 +3,13 @@ import logging
 import pkgutil
 from asyncio import create_task
 
-from nicegui import ui
+from nicegui import (
+    app,
+    ui
+)
 
 from isoplots.isonice import WD
+from isoplots.isonice.utils.resources import Resources
 
 
 Logger = logging.getLogger("Tabs")
@@ -36,9 +40,15 @@ class Tabs:
 
         with ui.splitter(value=5).classes("w-full h-full") as splitter:
             with splitter.before:
-                with ui.tabs().props('vertical').classes('w-full h-full') as tabs:
+                with ui.tabs().props('vertical').classes('w-full flex-1') as tabs:
                     for name, mod in Modules.items():
                         self.buttons[name] = ui.tab(name, icon=mod.Icon)
+
+                # This will stick to the bottom
+                with ui.element('div').classes('w-full flex-1'):
+                    self.res = Resources()
+                    self.res.start()
+                    app.on_shutdown(self.res.stop)
 
             with splitter.after:
                 default = self.buttons[list(self.buttons)[0]]

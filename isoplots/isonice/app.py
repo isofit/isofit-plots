@@ -12,6 +12,7 @@ from nicegui import (
 
 from isoplots.isonice import Config
 from isoplots.isonice.tabs import Tabs
+from isoplots.isonice.utils import ports
 
 
 Logger = logging.getLogger("App")
@@ -25,7 +26,7 @@ ui.add_head_html('''
     <link rel="stylesheet" href="/static/jse-theme-dark.css">
 ''')
 
-# Makes
+# Makes top-level objects (like Tabs) use the full height of the screen
 ui.context.client.content.classes('h-screen')
 
 dark = ui.dark_mode()
@@ -51,7 +52,7 @@ def launch(path=".", config=None, check=False, **kwargs):
     """
     if check:
         Logger.info("Checking ports")
-        checkPorts(kwargs.get("port", 8080))
+        ports.checkPorts(kwargs.get("port", 8080))
 
     if path:
         Logger.info(f"Setting path: {path}")
