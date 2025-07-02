@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from functools import cached_property
@@ -153,6 +154,7 @@ class FileFinder:
 
     cache = None
     patterns = {}
+    _compiled = []
     extensions = []
 
     def __init__(self, path, cache=True, extensions=[], patterns={}):
@@ -177,6 +179,9 @@ class FileFinder:
         if patterns:
             self.patterns = patterns
 
+        if self.patterns:
+            self._compiled = [(re.compile(p), desc) for p, desc in self.patterns.items()]
+
         if cache:
             self.cache = {}
 
@@ -200,12 +205,11 @@ class FileFinder:
         any
             Returns the value if a regex key in the patterns dict matches the file name
         """
-        file = str(file)  # Not pathlib.Path compatible
-        for pattern, desc in self.patterns.items():
-            if re.match(pattern, file):
+        for pattern, desc in self._compiled:
+            if pattern.search(file):
                 return desc
 
-    @property
+    @cached_property
     def files(self):
         """
         Passthrough attribute to calling getFlat()
@@ -232,11 +236,13 @@ class FileFinder:
         try:
             if file.is_dir():
                 return False
+
             if "*" in self.extensions:
                 return True
+
             return file.suffix in self.extensions
         except:
-            self.log.exception(f"Failed to parse file: {file}")
+            self.log.exception(f"Failed to evaluate extension match: {file}")
 
     def getTree(self, info=False, *, path=None, tree=None):
         """
@@ -257,23 +263,26 @@ class FileFinder:
             Tree structure of discovered files. The keys are the directory names and
             the list values are the found files
         """
-        if path is None:
-            path = self.path
+        path = Path(path or self.path)
+        tree = tree if tree is not None else []
 
-        if tree is None:
-            tree = []
+        try:
+            with os.scandir(path) as scan:
+                for item in scan:
+                    name = item.name
+                    if info:
+                        name = FileInfo(name, self.info(name))
 
-        for item in path.glob("*"):
-            name = item.name
-            if info:
-                name = FileInfo(item.name, None)
+                    if item.is_dir():
+                        subtree = []
+                        tree.append({name: subtree})
+                        self.getTree(info=info, path=item.path, tree=subtree)
 
-            if item.is_dir():
-                tree.append({name: []})
-                self.getTree(info=info, path=item, tree=tree[-1][name])
+                    elif self.extMatches(Path(item.path)):
+                        tree.append(name)
 
-            elif self.extMatches(item):
-                tree.append(name)
+        except Exception as e:
+            self.log.exception(f"Error reading path {path}")
 
         return tree
 
@@ -283,22 +292,26 @@ class FileFinder:
 
         Parameters
         ----------
-        path : pathlib.Path, default=None
-            Directory to search, defaults to self.path
+        path : pathlib.Path or None
+            Root path to search, defaults to self.path
 
         Returns
         -------
         files : list[str]
-            List structure of discovered files
+            Flat list of matching file paths relative to base
         """
-        if path is None:
-            path = self.path
+        base = Path(path or self.path)
+        base_len = len(str(base)) + 1  # precompute for slicing
 
         files = []
-        for file in self.path.rglob("*"):
-            if self.extMatches(file):
-                name = str(file).replace(f"{path}/", "")
-                files.append(name)
+        try:
+            for root, _, filenames in os.walk(base):
+                for name in filenames:
+                    path = Path(root) / name
+                    if self.extMatches(path):
+                        files.append(str(path)[base_len:])
+        except:
+            self.log.exception(f"Error scanning directory tree: {base}")
 
         return sorted(files)
 
@@ -327,153 +340,129 @@ class FileFinder:
         found = []
         for file in self.getFlat():
             if name in file:
-                for string in exc:
-                    if string in file:
-                        break
-                else:
+                if not any(ex in file for ex in exc):
                     found.append(file)
 
-        if not all:
-            if len(found) > 1:
-                self.log.warning(
-                    f"{len(found)} files were found containing the provided name {name!r}, try being more specific. Returning just the first instance"
-                )
+        if not all and len(found) > 1:
+            self.log.warning(
+                "%d files matched pattern '%s'. Returning first match.", len(found), regex
+            )
 
-            if found:
-                return found[0]
-        return found
+        return found if all else (found[0] if found else None)
 
     def match(self, regex, all=False, exc=[]):
         """
-        Find files using a regex match
+        Find files using a regex search
 
         Parameters
         ----------
         regex : str
-            Regex pattern to match with
+            Regex pattern to search for
         all : bool, default=False
-            Return all files matched instead of the first instance
-        exc : str | list[str], default=[]
-            A string or list of strings to use to exclude files. If a file contains
-            one of the strings in its name, it will not be selected
+            Return all matches instead of first match
+        exc : str or list of str
+            Strings to exclude from results
 
         Returns
         -------
-        str | list | None
-            First matched file if all is False, otherwise the full list
+        str or list or None
+            File path(s) matching the pattern
         """
         if isinstance(exc, str):
             exc = [exc]
 
+        try:
+            pattern = re.compile(regex)
+        except re.error:
+            self.log.exception("Invalid regex pattern: %s", regex)
+            raise
+
         found = []
         for file in self.getFlat():
-            try:
-                if re.match(regex, file):
-                    for string in exc:
-                        if string in file:
-                            break
-                    else:
-                        found.append(file)
-            except Exception as e:
-                self.log.exception(f"Is this a valid regex? {regex}")
-                raise e
+            if pattern.search(file):
+                if not any(ex in file for ex in exc):
+                    found.append(file)
 
-        if not all:
-            if len(found) > 1:
-                self.log.warning(
-                    f"{len(found)} files were found containing the provided regex {regex!r}, try being more specific. Returning just the first instance"
-                )
+        if not all and len(found) > 1:
+            self.log.warning(
+                "%d files matched pattern '%s'. Returning first match.", len(found), regex
+            )
 
-            if found:
-                return found[0]
-        return found
+        return found if all else (found[0] if found else None)
 
     def find(self, name, *args, **kwargs):
         """
-        Find files using a pre-built regex match. The regex will be in the form of:
-            (\S*{part}\S*) for each part in the name split by "/", delineated by "/"
-
-        For example:
-            abc/xyz = (\S*abc\S*/\S*xyz\S*)
-            part1/part2/part3 = (\S*part1\S*/\S*part2\S*/\S*part3\S*)
-
-        Use .match() for exact control of the regex string
+        Smart search for a file based on partial path structure
 
         Parameters
         ----------
         name : str
-            Name to parse into a regex string
-        *args : list, default=[]
-            Additional arguments to pass to match. Refer to that function for
-            additional information
-        *kwargs : list, default={}
-            Additional key-word arguments to pass to match. Refer to that function for
-            additional information
+            Path-like name to construct fuzzy regex search
+        *args, **kwargs : forwarded to match()
 
         Returns
         -------
-        str | list | None
-            First matched file if all is False, otherwise the full list
+        str or list or None
+            Matched file(s)
         """
-        regex = "/".join([f"\S*{part}\S*" for part in name.split("/")])
-        regex = rf"({regex})"
-
+        # Escape user input to avoid accidental regex issues
+        regex_parts = [f".*{re.escape(part)}.*" for part in name.split("/")]
+        regex = "/".join(regex_parts)
         return self.match(regex, *args, **kwargs)
 
     def load(self, *, path=None, ifin=None, find=None, match=None):
         """
-        Loads a file. One of the key-word arguments must be set. If more than one is
-        given, the only first will be used
+        Loads a file based on one of several matching strategies
+        Only the first provided method is used
 
         Parameters
         ----------
         path : str
-            Either the path to an existing file or the name of a file under self.path
+            Direct path to a file (absolute or relative to self.path)
         ifin : str
-            Use the ifin function to find the file to load
+            Substring match against available files
         find : str
-            Use the find function to find the file to load
+            Smart path-style fuzzy match
         match : str
-            Use the match function to find the file to load
+            Regex match
 
         Returns
         -------
         any
-            Returns the subclass's ._load(file)
+            Loaded object from subclass's _load method
         """
-        args = {path, ifin, find, match} - set([None])
-        if not args:
-            raise AttributeError("One of the key-word arguments must be set")
-        elif len(args) > 1:
-            self.log.warning("Only one key-word argument should be set")
-
-        if path:
+        file = None
+        if path is not None:
             file = path
-        elif ifin:
+        elif ifin is not None:
             file = self.ifin(ifin)
-        elif find:
+        elif find is not None:
             file = self.find(find)
-        elif match:
+        elif match is not None:
             file = self.match(match)
+        else:
+            raise AttributeError("One of the key-word arguments must be set")
 
-        if file and not Path(file).exists():
-            file = self.path / file
+        if file is None:
+            raise FileNotFoundError("Cannot find file to load")
 
-        if not file or not (file := Path(file)).exists():
-            raise FileNotFoundError(f"Cannot find file to load, attempted: {file}")
+        if not (p := Path(file)).exists():
+            p = self.path / file
+            if not p.exists():
+                raise FileNotFoundError("Cannot find file to load, attempted: %s", file)
 
         if self.cache is not None:
-            if file not in self.cache:
-                self.log.debug(f"Loading file: {file}")
-                data = self._load(file)
+            if p not in self.cache:
+                self.log.debug("Loading file: %s", p)
+                data = self._load(p)
                 if data is not None:
-                    self.cache[file] = data
+                    self.cache[p] = data
 
-            self.log.debug(f"Returning from cache: {file}")
-            return self.cache.get(file)
+            self.log.debug("Returning from cache: %s", p)
+            return self.cache.get(p)
 
-        self.log.debug(f"Returning from load: {file}")
-        return self._load(file)
+        self.log.debug("Returning from load: %s", p)
+        return self._load(p)
 
     def _load(self, file):
         raise NotImplementedError("Subclass must define this function")
@@ -1111,27 +1100,30 @@ class IsofitWD(FileFinder):
         ----------
         info : bool, default=False
             Return the found files as objects with their respective info
-        path : pathlib.Path, default=None
-            Directory to search, defaults to self.path
-        tree : dict, default=None
-            Tree structure of discovered files
 
         Returns
         -------
-        tree : dict
-            Tree structure of discovered files. The keys are the directory names and
-            the list values are the found files
+        tree : list
+            Tree structure of discovered files
         """
         tree = []
+
+        # First handle known subdirectories (mapped to handlers)
         for name, obj in self.dirs.items():
             if info:
                 name = FileInfo(name, self.info(name))
-            tree.append({name: obj.getTree(info, **kwargs)})
 
-        for path in self.path.glob("*"):
-            if (name := path.name) not in self.dirs:
-                if info:
-                    name = FileInfo(name, self.info(name))
-                tree.append(name)
+            tree.append({name: obj.getTree(info=info, **kwargs)})
+
+        # Now scan the actual directory to catch unknown entries
+        try:
+            with os.scandir(self.path) as scan:
+                for path in scan:
+                    if (name := path.name) not in self.dirs:
+                        if info:
+                            name = FileInfo(name, self.info(name))
+                        tree.append(name)
+        except:
+            self.log.exception(f"Error reading path {path}")
 
         return tree
