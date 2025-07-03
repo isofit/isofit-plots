@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import xarray as xr
@@ -531,8 +532,15 @@ class Tab:
                 bands = [self.r.value, self.g.value, self.b.value]
                 rgb = self.active["data"].sel(band=bands).transpose("y", "x", "band")
 
+                lower, upper = 2, 98
                 if self.brighten.value:
-                    rgb /= rgb.max(["x", "y"])
+                    lower, upper = 10, 90
+
+                # Stretch and clip
+                vmin = np.nanpercentile(rgb, lower, axis=(1, 0))
+                vmax = np.nanpercentile(rgb, upper, axis=(1, 0))
+                rgb = (rgb - vmin) / (vmax - vmin)
+                rgb = rgb.clip(0, 1)
 
                 # Convert to pixel coords for easier pixel selection
                 rgb["x"] = range(rgb.x.size)
