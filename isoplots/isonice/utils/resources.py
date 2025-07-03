@@ -90,8 +90,8 @@ class Resources:
             sys = psutil.virtual_memory()
             app = process.memory_info().rss / self.units
 
-            used = sys.used / self.units
-            free = self.total - (used + app)
+            used = sys.used / self.units - app
+            free = self.total - used
 
             self.echart.options['series'][0]['data'][0] = np.round(app, 2)
             self.echart.options['series'][1]['data'][0] = np.round(used, 2)
