@@ -65,8 +65,6 @@ def launch(path=".", config=None, check=False, **kwargs):
         Logger.info(f"Reading config: {config}")
         Config.read(config)
 
-        GUI.tabs["Setup"].addPathButtons()
-
     Logger.info("Launching")
     ui.run(**kwargs)
 

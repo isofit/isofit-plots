@@ -18,6 +18,7 @@ from isoplots.isonice import (
     Loaders
 )
 from isoplots.isonice.utils import plots
+from isoplots.isonice.utils.enhancedinput import EnhancedInput
 
 
 Logger = logging.getLogger("Spectra")
@@ -353,12 +354,12 @@ class Tab:
                 .style(f"--q-primary: {color};") \
                 .tooltip("Set this data as the image")
 
-                row["select"] = ui.select(
-                    options = self.files,
+                row["select"] = EnhancedInput(
                     label = "Select data file",
-                    on_change = lambda e: self.loadFile(e.value, row),
-                    new_value_mode = "add-unique",
-                ).classes("flex-1").props("dense")
+                    options = self.files,
+                    default = "Options",
+                    on_change = lambda path: self.loadFile(path, row),
+                ).classes("flex-1")
 
                 if main:
                     self.active = row
@@ -472,15 +473,28 @@ class Tab:
         row : dict
             Input dict associated with this file
         """
+        # No change, no action
+        if file == row.get("file"):
+            return
+
         self.loading.visible = True
 
-        row["file"] = file
-        row["data"] = await run.io_bound(self.load, path=file)
+        data = await run.io_bound(self.load, path=file)
 
-        if row["data"] is None:
+        if data is None:
             Logger.error("No data available, returning")
+
+            # Reset to the last value if set
+            if file := row.get("file"):
+                row["select"].set_value(file)
+
+            row["select"].set_error(f"Failed to load file, check logs: {file}")
+
             self.loading.visible = False
             return
+
+        row["file"] = file
+        row["data"] = data
 
         if row == self.active:
             self.scroll.clear()

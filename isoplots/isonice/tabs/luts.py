@@ -14,6 +14,7 @@ from nicegui import (
 from isofit.radiative_transfer import luts
 from isoplots.isonice import WD
 from isoplots.isonice.utils import plots
+from isoplots.isonice.utils.enhancedinput import EnhancedInput
 
 
 Logger = logging.getLogger("LUTs")
@@ -60,48 +61,51 @@ class MultiPlotLUT:
         with ui.card().classes("w-full border"):
             with ui.column().classes("w-full"):
                 with ui.row().classes("w-full items-center") as self.header:
-                    self.main["select"] = ui.select(
+                    # self.main["select"] = ui.select(
+                    #     label = "LUT File",
+                    #     options = self.files,
+                    #     multiple = False, # TODO?
+                    #     new_value_mode = "add-unique",
+                    #     on_change = lambda e: self.changeFile(e.value)
+                    # ).classes("w-[56%]").props('use-chips')
+                    self.main["select"] = EnhancedInput(
                         label = "LUT File",
                         options = self.files,
-                        multiple = False, # TODO?
-                        new_value_mode = "add-unique",
-                        on_change = lambda e: self.changeFile(e.value)
-                    ).classes("w-[56%]").props('use-chips')
+                        default = "Options",
+                        on_change = lambda e: self.changeFile(e)
+                    ).classes("flex-1")
 
                     self.quants = ui.select(
                         label = "Select a LUT quantity",
                         options = [],
                         on_change = lambda e: self.changeQuant(e.value)
-                    ).classes("w-[15%]")
+                    ).classes("flex-1")
                     self.quants.disable()
 
                     self.dims = ui.select(
                         label = "Select a LUT dimension",
                         options = [],
                         on_change = lambda e: self.changeDim(e.value)
-                    ).classes("w-[15%]")
+                    ).classes("flex-1")
                     self.dims.disable()
 
-                    ui.button(
-                        icon = "question_mark",
-                        # on_click = lambda: self.deleteSubplot(plot),
-                    ).props("outline round") \
-                    .classes("ml-auto") \
-                    .tooltip("Select a LUT file or provide a path to a LUT file to load the quantities. Then select a quantity to load the dimensions. Finally, select a dimension to plot.")
+                    with ui.button_group().props("outline"):
+                        ui.button(
+                            icon = "question_mark",
+                        ).props("outline") \
+                        .tooltip("Select a LUT file or provide a path to a LUT file to load the quantities. Then select a quantity to load the dimensions. Finally, select a dimension to plot.")
 
-                    ui.button(
-                        icon = "add",
-                        on_click = self.createSubplot,
-                    ).props("outline round") \
-                    .classes("ml-auto") \
-                    .tooltip("Add subplot. This will share X and Y axes as well as quantity and dimension with the main plot")
+                        ui.button(
+                            icon = "add",
+                            on_click = self.createSubplot,
+                        ).props("outline") \
+                        .tooltip("Add subplot. This will share X and Y axes as well as quantity and dimension with the main plot")
 
-                    ui.button(
-                        icon = "close",
-                        on_click = lambda: parent.deletePlot(self)
-                    ).props("outline round") \
-                    .classes("ml-auto") \
-                    .tooltip("Removes this entire plot group")
+                        ui.button(
+                            icon = "close",
+                            on_click = lambda: parent.deletePlot(self)
+                        ).props("outline") \
+                        .tooltip("Removes this entire plot group")
 
                 # Relative wrapper to control layering
                 with ui.element().classes("relative w-full") as self.column:
@@ -150,7 +154,7 @@ class MultiPlotLUT:
         if file not in self.cache:
             if Path(file).exists():
                 try:
-                    self.cache[file] = luts.load(file).unstack()
+                    self.cache[file] = luts.load(file, mode="r").unstack()
                 except Exception as e:
                     Logger.exception(f"Failed to load via luts.py")
             else:
@@ -180,17 +184,23 @@ class MultiPlotLUT:
 
         with self.header:
             with ui.row().classes("w-full items-center"):
-                plot["select"] = ui.select(
+                # plot["select"] = ui.select(
+                #     label = f"LUT File for Plot {len(self.plots)}",
+                #     options = self.files,
+                #     new_value_mode = "add-unique",
+                #     on_change = lambda e: self.updateSubplot(plot, file=e.value)
+                # ).classes("w-[96%]")
+                plot["select"] = EnhancedInput(
                     label = f"LUT File for Plot {len(self.plots)}",
                     options = self.files,
-                    new_value_mode = "add-unique",
-                    on_change = lambda e: self.updateSubplot(plot, file=e.value)
-                ).classes("w-[96%]")
+                    default = "Options",
+                    on_change = lambda e: self.updateSubplot(plot, file=e)
+                ).classes("flex-1")
 
                 ui.button(
                     icon = "close",
                     on_click = lambda: self.deleteSubplot(plot),
-                ).props("outline round").tooltip("Remove subplot").classes("ml-auto")
+                ).props("outline").tooltip("Remove subplot")
 
         # Shift to bottom of the card
         # self.ui.move(target_index=-1)

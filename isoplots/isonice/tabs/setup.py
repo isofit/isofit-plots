@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from asyncio import sleep
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from isoplots.isonice import (
     Config,
     WD
 )
+from isoplots.isonice.utils.enhancedinput import EnhancedInput
 
 Logger = logging.getLogger("Setup")
 
@@ -203,20 +205,20 @@ class Tab:
         """
         self.parent = parent
 
-        self.pathBtns = ui.button_group().props("outline").classes("w-full")
-
         with ui.row().classes("w-full items-center"):
-            with ui.button("Set as Working Directory",
+            with ui.button(
+                icon = "settings_suggest",
                 on_click = self.setWD
-            ).props("outline"):
+
+            ).props("outline dense").classes("h-full"):
                 with ui.tooltip():
                     ui.label("Set this path as the active working directory")
                     ui.label("This will recursively search for ISOFIT products")
-                    ui.label("Only do this on known directories as this is an expensive operation")
-                    ui.label("Executing this on protected or excessively deep directories may crash this program's server")
+                    ui.label("Only do this on known directories as this can be an expensive operation")
 
-            self.search = ui.input("Search",
-                on_change = self.glob
+            self.search = EnhancedInput(
+                label = "Search",
+                animated = False
             ).classes("flex-grow")
 
         self.preview = ui.column().classes("w-full")
@@ -226,20 +228,13 @@ class Tab:
         self.directoryTree = ui.scroll_area().classes("w-full h-full")
         self.stepper()
 
-    def addPathButtons(self):
+    def addConfigPaths(self):
         """
+        Adds paths from the config to the EnhancedInput options tab
         """
-        setWD = lambda e: self.search.set_value(Config["Paths"][e.sender.text])
-
-        self.pathBtns.clear()
         if "Paths" in Config:
-            with self.pathBtns:
-                for name, path in Config["Paths"].items():
-                    if not Path(path).exists():
-                        Logger.error(f"Path not found: {path}")
-                        continue
-
-                    ui.button(name, on_click=setWD).props("outline").classes("flex-grow")
+            self.search.set_options(Config["Paths"].values())
+            self.search.set_tab("Options")
 
     async def glob(self, path):
         """
@@ -324,7 +319,10 @@ class Tab:
         with self.directoryTree:
             with ui.stepper().props("vertical").classes("w-full") as stepper:
                 with ui.step(f"Setting path"):
-                    ui.label("Select a path above to get started")
+                    with ui.row():
+                        ui.label("Select a path above and hit the")
+                        ui.icon("settings_suggest", size="sm")
+                        ui.label("button to get started")
                     ui.label("Having an active working directory simplifies many of the UI features")
                     ui.label("Alternatively, select tabs on the left and manually input products")
                     ui.label("While processing a path, the tabs will be disabled to protect against thread race conditions")
@@ -344,7 +342,7 @@ class Tab:
     async def reset(self):
         """
         """
-        self.addPathButtons()
+        self.addConfigPaths()
 
     async def setWD(self):
         """
@@ -360,6 +358,10 @@ class Tab:
         stepper.next() # Setting path, done
 
         await run.io_bound(WD.reset, path, recursive=True)
+
+        # Set the path as the working directory for the overall Python instance
+        os.chdir(path)
+
         self.parent.resetTabs()
         stepper.next() # Recursively search, done
 
