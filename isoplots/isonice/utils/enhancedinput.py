@@ -341,8 +341,6 @@ class EnhancedInput:
         if new.is_dir():
             new = f"{new}/"
 
-        print(f"NEW: {new}")
-
         self.input.set_value(str(new))
 
     def resolve(self):
