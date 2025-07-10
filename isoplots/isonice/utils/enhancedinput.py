@@ -35,6 +35,10 @@ class EnhancedInput:
         # Track the last value, only call on_change when the new is different than the old
         self._lastValue = None
 
+        # Track the current table to prevent needless refreshes
+        self._currTable = None
+
+        self.default = default
         self.animated = animated
         self.on_change = on_change
         self.opts_close = opts_close
@@ -49,8 +53,7 @@ class EnhancedInput:
                 on_change = self.glob,
             ).classes("w-full") \
             .on("click", self.open) \
-            .on("keydown.enter", self.toggleDropdown) \
-            .on("keydown", lambda: self.open(tab="Browse"))
+            .on("keydown", self.keydown)
 
             with ui.element('div').classes('w-full bg-black shadow-lg rounded') as self.dropdown:
                 if self.animated:
@@ -60,27 +63,73 @@ class EnhancedInput:
                 if vertical:
                     with ui.splitter(value=10).classes('w-full h-full') as splitter:
                         with splitter.before:
-                            with ui.tabs().props('vertical').classes('w-full') as self.tabs:
-                                ui.tab('Browse')
-                                ui.tab('Options')
-                            ui.button(icon="all_out", on_click=self.resolve).props("outline dense").tooltip("Resolve the current path")
+                            self._construct("tabs")
+                            self.tabs.props("vertical")
                         with splitter.after:
-                            with ui.tab_panels(self.tabs, value=default).classes('w-full'):
-                                self.grid = ui.tab_panel("Browse").classes("p-0")
-                                self.opts = ui.tab_panel("Options").classes("p-0")
-                                self.set_options(options)
+                            self._construct("panels")
                 else:
-                    with ui.tabs().classes('w-full') as self.tabs:
-                        ui.tab('Browse')
-                        ui.tab('Options')
-                        ui.button(icon="all_out", on_click=self.resolve) \
-                            .classes("h-full") \
-                            .props("outline dense") \
-                            .tooltip("Resolve the current path")
-                    with ui.tab_panels(self.tabs, value=default).classes('w-full'):
-                        self.grid = ui.tab_panel("Browse").classes("p-0")
-                        self.opts = ui.tab_panel("Options").classes("p-0")
-                        self.set_options(options)
+                    self._construct("tabs")
+                    self._construct("panels")
+
+                self.set_options(options)
+
+    def _construct(self, component):
+        """
+        Easy constructor for the tabs components
+
+        Parameters
+        ----------
+        component : "tabs" | "panels"
+            Which component to construct
+        """
+        if component == "tabs":
+
+            with ui.tabs().classes('w-full') as self.tabs:
+                ui.tab('Browse').classes("flex-1")
+                ui.tab('Options').classes("flex-1")
+                ui.button(icon="all_out", on_click=self.resolve) \
+                    .classes("h-full") \
+                    .props("outline dense") \
+                    .tooltip("Resolve the current path")
+
+        elif component == "panels":
+
+            with ui.tab_panels(self.tabs, value=self.default).classes('w-full'):
+                with ui.tab_panel("Browse").classes("p-0"):
+                    self.grid = ui.aggrid({
+                        "columnDefs": [
+                            {"field": "path"}
+                        ],
+                        "rowData": [{}]
+                    }, theme="balham-dark"
+                    ).classes(
+                        "hide-header"
+                    ).on('cellClicked',
+                        lambda event: self.appendSearch(event.args["value"])
+                    )
+                self.opts = ui.tab_panel("Options").classes("p-0")
+
+    async def keydown(self, event):
+        """
+        Handler for a keydown event, ie. typing in the input field
+
+        Parameters
+        ----------
+        event : GenericEventArguments
+            Key event
+        """
+        key = event.args["key"]
+        shift = event.args["shiftKey"]
+
+        if key == "Enter":
+            self.toggleDropdown()
+            return
+        elif key == "Backspace" and shift:
+            pass
+            # REVIEW: Doesn't seem to work
+            # self.appendSearch("")
+
+        await self.open(tab="Browse")
 
     @property
     def value(self):
@@ -187,7 +236,7 @@ class EnhancedInput:
         """
         self.tabs.set_value(tab)
 
-    def open(self, tab=None):
+    async def open(self, tab=None):
         """
         Opens the dropdown
 
@@ -199,8 +248,10 @@ class EnhancedInput:
         if tab:
             self.set_tab(tab)
 
-        self.toggleDropdown(True)
-        self.glob()
+        if self.animated:
+            self.toggleDropdown(True)
+
+        await self.glob()
 
     def toggleDropdown(self, open=False):
         """
@@ -222,7 +273,7 @@ class EnhancedInput:
         else:
             self._call_on_change()
 
-    def glob(self):
+    async def glob(self):
         """
         Globs the filesystem at the current search path, placing directories before
         files
@@ -232,10 +283,6 @@ class EnhancedInput:
         path : ValueChangeEventArguments
             Event when the search string changes
         """
-        self.grid.clear()
-        with self.grid:
-            ui.spinner('dots', size='xl')
-
         path = Path(self.input.value)
         if not path.exists():
             glob = path.parent.glob(f"{path.name}*")
@@ -252,25 +299,23 @@ class EnhancedInput:
             else:
                 files.append(file.name)
 
-        parent = path.parent
+        # If the parent is the base dir, don't include the /
+        parent = str(path.parent)
+        if parent == ".":
+            parent = ""
+        else:
+            parent += "/"
 
         data = ["../"] + sorted(dirs) + sorted(files)
-        auto = [f"{parent}/{file}" for file in data]
+        auto = [f"{parent}{file}" for file in data]
+
         self.input.set_autocomplete(auto)
 
-        self.grid.clear()
-        with self.grid:
-            ui.aggrid({
-                "columnDefs": [
-                    {"field": "path"}
-                ],
-                "rowData": [{"path": file} for file in data]
-            }, theme="balham-dark"
-            ).classes(
-                "hide-header"
-            ).on('cellClicked',
-                lambda event: self.appendSearch(event.args["value"])
-            )
+        if self._currTable != data:
+            self._currTable = data
+
+            self.grid.options['rowData'] = [{"path": file} for file in data]
+            self.grid.update()
 
     def appendSearch(self, path):
         """
@@ -295,6 +340,8 @@ class EnhancedInput:
 
         if new.is_dir():
             new = f"{new}/"
+
+        print(f"NEW: {new}")
 
         self.input.set_value(str(new))
 
@@ -335,7 +382,7 @@ class EnhancedInput:
 # For debugging purposes
 if __name__ in {"__main__", "__mp_main__"}:
     with ui.column().classes("w-[50vw]"):
-        EnhancedInput("Search",
+        EnhancedInput("Options",
             default="Options",
             on_change=lambda s: print(s),
             options=[
@@ -344,6 +391,7 @@ if __name__ in {"__main__", "__mp_main__"}:
                 "."
             ]
         ).classes("w-full")
-        EnhancedInput("Select a data file").classes("w-full")
+        EnhancedInput("Browse").classes("w-full")
+        EnhancedInput("Not animated", animated=False).classes("w-full")
 
     ui.run(dark=True)
