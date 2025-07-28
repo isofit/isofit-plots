@@ -6,6 +6,13 @@ import click
 import isoplots
 
 
+class LazyIsonice:
+    def __getattr__(self, key):
+        from isoplots.isonice import app
+
+        return getattr(app, key)
+
+
 class CLI(click.MultiCommand):
     """
     Lazy loads the plotting modules so that this can be a subcommand of the isofit CLI
@@ -13,9 +20,8 @@ class CLI(click.MultiCommand):
     """
     def _load_modules(self):
         from isoplots.plots import Modules
-        from isoplots.isonice import app
 
-        Modules["browser"] = app
+        Modules["browser"] = LazyIsonice()
 
         return Modules
 

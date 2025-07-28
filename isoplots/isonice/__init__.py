@@ -9,4 +9,4 @@ except:
 
 # Globally shared single-states
 Config = configparser.ConfigParser()
-WD = IsofitWD(".")
+WD = IsofitWD()

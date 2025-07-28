@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -125,12 +126,22 @@ class EnviBackendEntrypoint(BackendEntrypoint):
 
         dims = ("y", "x", "band")
         coords = {
-            "wavelength": (("band",), np.array(meta.pop("wavelength")).astype(float)),
-            "fwhm": (("band",), np.array(meta.pop("fwhm")).astype(float)),
-            "band": range(1, data.shape[-1] + 1),
+            "band": range(1, data.shape[-1] + 1)
         }
 
-        ds = xr.Dataset({"band_data": (dims, data)}, coords=coords)
+        if "wavelength" in meta:
+            wl = np.array(meta.pop("wavelength")).astype(float)
+            fwhm = np.array(meta.pop("fwhm")).astype(float)
+
+            # If the lengths match, tie these to the band dim
+            if len(wl) == data.shape[-1]:
+                coords["wavelength"] = ("band", wl)
+                coords["fwhm"] = ("band", fwhm)
+            else:
+                meta["wavelength"] = wl
+                meta["fwhm"] = fwhm
+
+        ds = xr.Dataset({"band_data": (dims, data)}, coords=coords, attrs=meta)
         ds = ds.transpose("band", "y", "x")
 
         ds["band_data"].attrs = meta
@@ -151,24 +162,25 @@ class FileFinder:
         function _load       - The loader for a passed file
         attribute extensions - A list of extensions to retrieve
     """
-
+    path = None
     cache = None
     patterns = {}
     _compiled = []
     extensions = []
 
-    def __init__(self, path, cache=True, extensions=[], patterns={}):
+    def __init__(self, path=None, cache=True, extensions=[], patterns={}):
         """
         Parameters
         ----------
-        path : str
+        path : str, default=None
             Path to directory to operate on
         cache : bool, default=True
             Enable caching objects in the .load function
         extensions : list, default=[]
             File extensions to retrieve when searching
         """
-        self.path = Path(path)
+        if path is not None:
+            self.path = Path(path)
 
         if extensions:
             self.extensions = extensions
@@ -975,6 +987,10 @@ class IsofitWD(FileFinder):
 
         super().__init__(*args, **kwargs)
 
+        # No path provided, will load current dir lazily on first call
+        if self.path is None:
+            return
+
         self.logs = Logs(self.path)
 
         self.dirs = {}
@@ -999,6 +1015,9 @@ class IsofitWD(FileFinder):
             self.dirs[subdir] = alt(self.path / subdir)
 
     def __getattr__(self, key):
+        # Auto reset to the current working directory if the object was initialized without an input
+        if self.__dict__.get("path") is None:
+            self.reset(".")
         return self.__getitem__(key)
 
     def __getitem__(self, key):
