@@ -83,6 +83,7 @@ def plot(
     """
     Plots memory and CPU from a resources.jsonl file
 
+    \b
     Parameters
     ----------
     resources : str
@@ -112,6 +113,7 @@ def plot(
     height : into, default=300
         Height of each plot
 
+    \b
     Returns
     -------
     go.Figure
