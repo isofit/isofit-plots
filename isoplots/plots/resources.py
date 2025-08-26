@@ -62,7 +62,7 @@ def parse(file):
     for pid, info in data.items():
         info["name"] = info["name"][0]
 
-    main = data[resources[1]["pid"]]
+    main = data[resources[2]["pid"]]
     data["main"] = main
     main["name"] = "Main Process"
 
