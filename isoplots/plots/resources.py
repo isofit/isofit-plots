@@ -51,9 +51,11 @@ def parse(file):
     with open(file) as f:
         resources = [json.loads(l) for l in f.readlines()]
 
-    header = resources[0]
+    descs = resources[0]
+    header = resources[1]
+
     data = {}
-    for line in resources[1:]:
+    for line in resources[2:]:
         time = dtt.fromtimestamp(line["timestamp"])
         append(line)
 
