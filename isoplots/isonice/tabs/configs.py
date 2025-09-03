@@ -5,7 +5,7 @@ from nicegui import ui
 from isoplots.isonice import WD
 
 
-Logger = logging.getLogger("Configs")
+Logger = logging.getLogger(__name__)
 
 Name = "Configs"
 Icon = "settings"

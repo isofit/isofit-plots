@@ -12,7 +12,7 @@ from isoplots.isonice import WD
 from isoplots.isonice.utils.resources import Resources
 
 
-Logger = logging.getLogger("Tabs")
+Logger = logging.getLogger(__name__)
 
 # Auto-discover tab modules
 Modules = {

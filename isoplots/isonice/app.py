@@ -15,7 +15,7 @@ from isoplots.isonice.tabs import Tabs
 from isoplots.isonice.utils import ports
 
 
-Logger = logging.getLogger("App")
+Logger = logging.getLogger(__name__)
 
 Base = Path(__file__).parent.resolve()
 Static = Base / 'static'

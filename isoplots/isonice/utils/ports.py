@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import xarray as xr
 
 
-Logger = logging.getLogger("utils/ports")
+Logger = logging.getLogger(__name__)
 
 
 def portAvail(port: int) -> bool:

@@ -21,7 +21,7 @@ from isoplots.isonice.utils import plots
 from isoplots.isonice.utils.enhancedinput import EnhancedInput
 
 
-Logger = logging.getLogger("Spectra")
+Logger = logging.getLogger(__name__)
 
 Name = "Spectra"
 Icon = "show_chart"
@@ -67,7 +67,6 @@ class Spectra:
                     ).classes('flex flex-col p-1')#.props("disable")
 
             # Plotly chart
-            blank = go.Figure(go.Scatter())
             self.plot = ui.plotly(plots.blank()).classes("w-full")
 
     def updateID(self, id=None):

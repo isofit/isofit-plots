@@ -17,7 +17,7 @@ from isoplots.isonice.utils import plots
 from isoplots.isonice.utils.enhancedinput import EnhancedInput
 
 
-Logger = logging.getLogger("LUTs")
+Logger = logging.getLogger(__name__)
 
 Name = "LUTs"
 Icon = "ssid_chart"

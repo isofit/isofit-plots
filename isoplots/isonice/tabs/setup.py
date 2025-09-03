@@ -15,7 +15,7 @@ from isoplots.isonice import (
 )
 from isoplots.isonice.utils.enhancedinput import EnhancedInput
 
-Logger = logging.getLogger("Setup")
+Logger = logging.getLogger(__name__)
 
 Name = "Setup"
 Icon = "home"

@@ -7,7 +7,7 @@ import psutil
 from nicegui import ui
 
 
-Logger = logging.getLogger("utils/resources")
+Logger = logging.getLogger(__name__)
 
 
 class Resources:
