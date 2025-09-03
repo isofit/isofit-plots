@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import xarray as xr
 
 
-Logger = logging.getLogger("utils/plots")
+Logger = logging.getLogger(__name__)
 
 
 def blank():
@@ -39,7 +39,7 @@ def plotlyColor(i):
     return c[i % len(c)]
 
 
-def multiplot(figs=[], height=300):
+def multiplot(figs=[], height=300, sharex="all", sharey="all", dark=True):
     """
     Creates a multi plot object that shares X and Y axes
 
@@ -49,6 +49,12 @@ def multiplot(figs=[], height=300):
         List of subplots to add
     height : int, default=300
         Height of each subplot
+    sharex : TODO, default="all"
+        Plotly figure .set_subplots parameter shared_xaxes
+    sharey : TODO, default="all"
+        Plotly figure .set_subplots parameter shared_yaxes
+    dark : bool, default=True
+        Sets the plotly template to dark
 
     Returns
     -------
@@ -59,36 +65,36 @@ def multiplot(figs=[], height=300):
     if not figs:
         figs = [go.Figure()]
 
+    titles = [fig.layout.title.text for fig in figs]
+    spacing = 0.01 # Minimal spacing when no titles are present
+    topMargin = 0
+    if titles:
+        topMargin = 20 # Needed so the top plot's title is shown
+        spacing = 0.1 / len(titles)
+
     fig = go.Figure()
     fig.set_subplots(
         rows = len(figs),
         cols = 1,
-        shared_xaxes = 'all',
-        shared_yaxes = 'all',
-        vertical_spacing = 0.01
+        shared_xaxes = sharex,
+        shared_yaxes = sharey,
+        subplot_titles = titles,
+        vertical_spacing = spacing,
     )
-    fig.update_layout(**{
-        "margin": dict(l=0, r=20, t=0, b=0),
-        "paper_bgcolor": "rgba(0, 0, 0, 0)",
-        "template": "plotly_dark",
-        "height": height*len(figs),
-    })
+
+    if dark:
+        fig.update_layout(
+            template = "plotly_dark",
+            paper_bgcolor = "rgba(0, 0, 0, 0)",
+        )
+
+    fig.update_layout(
+        margin = dict(l=0, r=20, t=topMargin, b=0),
+        height = height*len(figs),
+    )
 
     for i, plot in enumerate(figs):
         for trace in plot.data:
-            # fig.update_layout(legendgroup=f"{i+1}")
             fig.add_trace(trace, row=i+1, col=1)
-
-    # TODO: Get subplots to have their own legends
-    # Does not work
-    # try:
-    #     for i, yaxis in enumerate(fig.select_yaxes()):
-    #         i += 1
-    #         legend_name = f"legend{i}"
-    #         if yaxis.domain is not None:
-    #             fig.update_layout({legend_name: dict(y=yaxis.domain[1], yanchor="top")}, showlegend=True)
-    #             fig.update_traces(row=i, legend=legend_name)
-    # except:
-    #     pass
 
     return fig
