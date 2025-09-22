@@ -30,6 +30,7 @@ classifiers = [
 ]
 dependencies = [
   "click",
+  "isofit",
   "matplotlib",
   "nicegui",
   "plotext",
@@ -37,6 +38,12 @@ dependencies = [
   # "spectral",
   "plotly",
   "xarray",
+]
+
+[project.optional-dependencies]
+docs = [
+  "mkdocs",
+  "mkapi"
 ]
 
 [project.urls]
