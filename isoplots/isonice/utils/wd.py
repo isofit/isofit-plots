@@ -9,7 +9,7 @@ import logging
 import os
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 from types import SimpleNamespace
@@ -646,268 +646,220 @@ class Output(FileFinder):
         return rgb
 
 
-class Logs(FileFinder):
-    extensions = [".log"]
+class Container:
+    """
+    Subclasses must contain the attributes:
+    data : list
+        Must be in the form of [(label[str], data[any])]
+    dataclass : dict
+        Must be in the form of {label[str]: dataclass}
 
-    file = None
-    _load = Loaders.text
+    The dataclass must have these attributes:
+        "enabled" : bool
+        "lines" : list
 
-    def __init__(self, *args, **kwargs):
-        """
-        Auto-loads the first discovered log file
-        """
-        super().__init__(*args, **kwargs)
+    The dataclass must have the bool attribute 'enabled' to check when iterating over
+    the data
 
-        # fmt: off
-        #                   # Source | Purpose
-        self.lines    = []  # build  | The formatted lines (end result of parse->filter->build)
-        self.split    = {}  # parse  | Each level containing only the parsed lines of that level
-        self.levels   = []  # parse  | Logging levels found in the log
-        self.format   = {}  # parse  | Additional formatting options used by build
-        self.content  = []  # parse  | Each line parsed into a dict of info
-        self.filtered = []  # filter | Lines passing the filter criteria of selected
-        self.selected = {}  # parse  | Turn logging levels on/off for the build function
-        # fmt: on
+    Additionally, subclasses may define the 'yields' attribute to control which
+    variable is yielded during iter:
+        "item"  = Yield the (label, data) pair
+        "label" = Yields the label string only
+        "data"  = Yields only the data
+    By default, "item" is yielded
+    """
+    yields = "item"
 
-    @cached_property
-    def file(self):
+    def __iter__(self):
         """
-        Retrieves the first found log file
+        Iterates over the "data" attribute, yielding if that dataclass is enabled
         """
-        files = self.getFlat()
-        if files:
-            return files[0]
+        for item in self.data:
+            label, data = item
+            if self.dataclass[label].enabled:
+                yield locals()[self.yields]
 
-    def load(self, *, path=None, ifin=None, find=None, match=None):
+    def __getattr__(self, label):
+        return self[label]
+
+    def __getitem__(self, label):
+        return self.dataclass.get(label)
+
+    def toggle(self, *labels, state):
         """
-        Loads a file. One of the key-word arguments must be set. If more than one is
-        given, the only first will be used
+        Toggles dataclasses' enabled state
 
         Parameters
         ----------
-        path : str
-            Either the path to an existing file or the name of a file under self.path
-        ifin : str
-            Use the ifin function to find the file to load
-        find : str
-            Use the find function to find the file to load
-        match : str
-            Use the match function to find the file to load
-
-        Returns
-        -------
-        list[str]
-            Parsed lines from the log file
+        *labels : str
+            Labels of the dataclasses to toggle
+        state : bool
+            Enabled state
         """
-        args = {path, ifin, find, match} - set([None])
-        if not args:
-            file = self.file
-        elif len(args) > 1:
-            self.log.warning("Only one key-word argument should be set")
-
-        if path:
-            file = path
-        elif ifin:
-            file = self.ifin(ifin)
-        elif find:
-            file = self.find(find)
-        elif match:
-            file = self.match(match)
-
-        if file and not Path(file).exists():
-            file = self.path / file
-
-        if not file or not Path(file).exists():
-            raise FileNotFoundError(f"Cannot find file to load, attempted: {file}")
-
-        self.file = file
-
-        return super().load(path=file)
-
-    def parse(self):
-        """
-        Parses an ISOFIT log file into a dictionary of content that can be used to
-        filter and reconstruct lines into different formats
-
-        Returns
-        -------
-        content : list[dict]
-            Parsed content from the log file in the form:
-                {
-                    "timestamp": str,
-                    "level": str,
-                    "message": str,
-                    "source": {
-                        "file": str,
-                        "func": str
-                    }
-                }
-        """
-        lines = self.load()
-
-        self.content = []
-        for line in lines:
-            line = line.strip()
-
-            # "[level]:[timestamp] || [source] | [message]"
-            if find := re.findall(r"(\w+):(\S+) \|\| (\S+) \| (.*)", line):
-                [find] = find
-                level = find[0]
-
-                source = find[2].split(":")
-                self.content.append(
-                    {
-                        "timestamp": find[1],
-                        "level": level,
-                        "message": find[3],
-                        "raw": line,
-                        "source": {
-                            "file": source[0],
-                            "func": source[1],
-                        },
-                    }
-                )
-            # "[level]:[timestamp] ||| [message]"
-            elif find := re.findall(r"(\w+):(\S+) \|\|\|? (.*)", line):
-                [find] = find
-                level = find[0]
-
-                self.content.append(
-                    {
-                        "timestamp": find[1],
-                        "level": level,
-                        "message": find[2],
-                        "raw": line,
-                    }
-                )
+        for label in labels:
+            if label in self.dataclass:
+                self.dataclass[label].enabled = state
             else:
-                self.content[-1]["message"] += f"\n{line}"
+                self.log.error(f"Label not found: {label!r}")
 
-        # Split the content dict into a dict of levels for quick reference
-        # eg. self.split["INFO"]["message"] to get all the info messages
-        self.split = {}
-        for line in self.content:
-            for key, value in line.items():
-                if key == "level":
-                    continue
-                level = self.split.setdefault(line["level"], {})
-                group = level.setdefault(key, [])
-                group.append(value)
-
-        # Extract the levels and sort them per the logging module
-        self.levels = sorted(set(self.split), key=lambda lvl: getattr(logging, lvl))
-        self.selected = {lvl: True for lvl in self.levels}
-        self.format = {"timestamps": True}
-
-        return self.content
-
-    def extract(self):
+    def enable(self, *args, **kwargs):
         """
-        Extracts useful information from the processed logs
+        Toggles dataclasses' enabled state to True
         """
-        self.stats = []
-        stats = SimpleNamespace()
+        self.toggle(*args, **kwargs, state=True)
 
-        for i, line in enumerate(self.content):
-            message = line["message"]
-
-            if message == "Run ISOFIT initial guess":
-                stats.name = "Presolve"
-
-            if message == "Running ISOFIT with full LUT":
-                stats.name = "Full Solution"
-
-            if message == "Analytical line inference":
-                stats.name = "Analytical Line"
-
-            if find := re.findall(r"Beginning (\d+) inversions", message):
-                stats.total = find[0]
-
-            if "inversions complete" in message.lower():
-                find = re.findall(r"(\d+\.\d+s?) (\S+)", message.replace(",", ""))
-
-                stats.data = {val: key for key, val in find}
-
-                self.stats.append(stats)
-
-                # Reset the stats object
-                stats = SimpleNamespace()
-
-    def filter(self, select=0):
+    def disable(self, *args, **kwargs):
         """
-        Filters the content per the `selected` dict
+        Toggles dataclasses' enabled state to False
+        """
+        self.toggle(*args, **kwargs, state=False)
+
+    def reset(self):
+        """
+        Resets the "lines" attribute of each dataclass to an empty list
+        """
+        for label, dataclass in self.dataclass.items():
+            if hasattr(dataclass, "lines"):
+                dataclass.lines = []
+
+
+@dataclass
+class Marker:
+    enabled: bool
+    regex: Pattern
+    lines: List[dict] = field(default_factory=list)
+
+
+class Markers(Container):
+    def __init__(self):
+        self.data = []
+        self.dataclass = {
+            "Presolve Start": Marker(
+                enabled = True,
+                regex = re.compile(r"Run ISOFIT initial guess"),
+            ),
+            "Full Solution Start": Marker(
+                enabled = True,
+                regex = re.compile(r"Running ISOFIT with full LUT"),
+            ),
+            "Inversions Start": Marker(
+                enabled = True,
+                regex = re.compile(r"Beginning \d+ inversions"),
+            ),
+            "Inversions End": Marker(
+                enabled = False,
+                regex = re.compile(r"Analytical line inversions complete"),
+            ),
+            "Analytical Start": Marker(
+                enabled = True,
+                regex = re.compile(r"Analytical line inference"),
+            ),
+            "Analytical End": Marker(
+                enabled = False,
+                regex = re.compile(r"Analytical line inversions complete .*"),
+            ),
+            "LUT Creation Start": Marker(
+                enabled = True,
+                regex = re.compile(r"Initializing LUT file"),
+            ),
+            "Loading LUT": Marker(
+                enabled = True,
+                regex = re.compile(r"Loading LUT into memory"),
+            ),
+            "Sims Start": Marker(
+                enabled = True,
+                regex = re.compile(r"Executing parallel simulations"),
+            ),
+            "Sims End": Marker(
+                enabled = True,
+                regex = re.compile(r"100.00% simulations complete"),
+            ),
+            "Flushing": Marker(
+                enabled = True,
+                regex = re.compile(r"Flushing netCDF to disk"),
+            ),
+        }
+
+        self.log = logging.getLogger(self.__class__.__name__)
+
+    def check(self, line):
+        """
+        Checks if the line's message matches one of the markers of interest and, if so,
+        appends it to that marker's match list
+        """
+        for label, marker in self.dataclass.items():
+            if marker.regex.match(line["message"]):
+                marker.lines.append(line)
+                self.data.append((label, line))
+
+                # No need to check the other markers
+                break
+
+
+@dataclass
+class Level:
+    enabled: bool
+    lines: List[dict] = field(default_factory=list)
+
+
+class Levels(Container):
+    yields = "data"
+
+    def __init__(self):
+        self.data = []
+        self.dataclass = {
+            "DEBUG": Level(enabled=True),
+            "INFO": Level(enabled=True),
+            "WARNING": Level(enabled=True),
+            "ERROR": Level(enabled=True),
+        }
+        self.formats = {
+            "timestamps": True,
+            "extra padding": True, # Adds +1 to the level padding in build()
+        }
+
+        self.log = logging.getLogger(self.__class__.__name__)
+
+    def toggle(self, *labels, state):
+        """
+        Overrides the inherited toggle function to check for "formats" keys first then
+        call super()
 
         Parameters
         ----------
-        select : str | list[str] | None, default=0
-            Toggles selections in the `selected` attribute. Options:
-            - "all" = Enable all options
-            - None  = Disable all options
-            - str   = Enable only this option
-            - list  = Enable only these options
-            - Anything else, such as the default 0, will do nothing and use the current
-              selected dict
+        labels : str | list[str]
+            Labels of the dataclasses or formats to toggle
+        state : bool
+            Enabled state
         """
-        if not self.content:
-            self.parse()
+        labels = set(labels)
+        formats = labels - set(self.dataclass)
+        for label in formats:
+            if label in self.formats:
+                self.formats[label] = state
 
-        if select == "all":
-            for key in self.selected:
-                self.selected[key] = True
-        elif select is None:
-            for key in self.selected:
-                self.selected[key] = False
-        elif isinstance(select, str):
-            for key in self.selected:
-                self.selected[key] = False
-            if key in self.selected:
-                self.selected[key] = True
-        elif isinstance(select, list):
-            for key in self.selected:
-                self.selected[key] = False
-            for key in select:
-                if key in self.selected:
-                    self.selected[key] = True
+        super().toggle(*(labels - formats), state=state)
 
-        self.filtered = []
-        for line in self.content:
-            if self.selected[line["level"]]:
-                self.filtered.append(line)
-
-        return self.filtered
-
-    def toggle(self, key, value=None):
+    def add(self, line):
         """
-        Sets a key's visibility in either the format dict or the selected dict
+        Adds a line line dict to the appropriate dataclass and data attribute
 
         Parameters
         ----------
-        key : str
-            Key of interest
-        value : bool, default=None
-            Value to set for the key
+        line : dict
+            Log line to add
         """
-        if key in self.format:
-            data = self.format
-        elif key in self.selected:
-            data = self.selected
-        else:
-            raise AttributeError(
-                f"Key not found in either the format dict {list(self.format)} or the level selection dict {list(self.selected)}"
-            )
-
-        if value is None:
-            value = not data[key]
-
-        data[key] = value
+        level = line["level"]
+        self.dataclass[level].lines.append(line)
+        self.data.append((level, line))
 
     def build(self):
         """
         Builds the filtered contents dict into a list of tuples to be used for writing.
         Timestamps can be disabled by one of:
 
-            self.format["timestamps"] = False
-            self.toggle("timestamps", False)
+            self.formats["timestamps"] = False
+            self.disable("timestamps")
 
         Returns
         -------
@@ -917,26 +869,108 @@ class Logs(FileFinder):
             Timestamp will be an empty string if it is not enabled
             The level is right-padded with whitespace to the length of the longest log
             level (eg. "warning", "debug  ")
-            This will also be saved in self.lines
         """
-        # Always re-filter
-        self.filter()
+        # Get the amount of padding needed to make level labels be equal
+        levels = [label
+            for label, level in self.dataclass.items()
+            if level.enabled and level.lines
+        ]
 
-        padding = len(max(self.levels)) + 1
+        if not levels:
+            self.log.warning("No lines were retrieved. This may be caused either by too strict filters or the log being empty")
+            return []
+
+        padding = len(max(levels)) + self.formats["extra padding"]
 
         lines = []
-        for c in self.filtered:
-            level = c["level"].ljust(padding)
+        for line in self:
+            level = line["level"].ljust(padding)
 
             ts = ""
-            if self.format["timestamps"]:
-                ts = c["timestamp"] + " "
+            if self.formats["timestamps"]:
+                ts = line["timestamp"] + self.formats["extra padding"]
 
-            lines.append([ts, level, c["message"]])
+            lines.append([ts, level, line["message"]])
 
-        self.lines = lines
+        return lines
 
-        return self.lines
+
+class Logs(FileFinder):
+    extensions = [".log"]
+    patterns = {r"(.*)": "ISOFIT log file"}
+
+    # Regex to detect the two types of ISOFIT log messages:
+    # - "[level]:[timestamp] || [source] | [message]"
+    # - "[level]:[timestamp] ||| [message]"
+    logline = re.compile(
+        r"(?P<level>[^:]+):"      # Match the log level (e.g., INFO), up to the colon
+        r"(?P<timestamp>[^\s|]+)" # Match the timestamp, up to the first pipe, excluding the space
+        r"\s*\|{2,3}\s*"          # Match either || or ||| with optional surrounding spaces
+        r"(?:(?P<source>[^\s|]+)" # Optionally match the source, excluding the space
+        r"\s*\|\s*)?"             # Followed by a single pipe and optional spaces
+        r"(?P<message>.+)"        # Match the rest of the line as the message
+    )
+
+    def __init__(self, file):
+        self.file = file
+
+        self.levels = Levels()
+        self.markers = Markers()
+
+    def _load(self, file):
+        """
+        Streams lines from a growing text file, yielding each new line as soon as it is
+        written
+        """
+        with open(file, "r") as f:
+            while True:
+                line = f.readline()
+                if line:
+                    yield line
+                else:
+                    yield None
+
+    def parse(self, line, content=[]):
+        """
+        Parses an ISOFIT log file into a dictionary of content that can be used to
+        filter and reconstruct lines into different formats
+        """
+        line = line.strip()
+
+        if match := self.logline.match(line):
+            parsed = match.groupdict()
+            content.append(parsed)
+
+            self.levels.add(parsed)
+            self.markers.check(parsed)
+        else:
+            parsed = content[-1]
+            parsed["message"] += f"\n{line}"
+
+        return parsed
+
+    def stream(self):
+        """
+        Streams new lines as they come in. If multiple new lines are retrieved at once,
+        returns them as a group
+        """
+        self.levels.reset()
+        self.markers.reset()
+        lines = self._load(self.file)
+
+        new = []
+        for line in lines:
+            if line:
+                self.parse(line, new)
+            else:
+                yield new
+                new = []
+
+    def read(self):
+        """
+        Reads the entirety of the log file as it presently exists
+        """
+        return next(self.stream())
 
 
 class Unknown(FileFinder):
@@ -1030,7 +1064,7 @@ class IsofitWD(FileFinder):
         if parent in self.dirs:
             return self.dirs[parent].load(path=subpath)
         else:
-            print(f"Files on the root path are not supported at this time: {subpath}")
+            self.log.warning(f"Files on the root path are not supported at this time: {subpath}")
 
     def reset(self, *args, **kwargs):
         """
