@@ -354,10 +354,10 @@ def plot(
 @click.option("-i", "--ignore", multiple=True)
 @click.option("-i+", "--ignore_append", multiple=True)
 @click.option("-i-", "--ignore_remove", multiple=True)
-@click.option("-r", "--reduce_legend", is_flag=True)
+@click.option("-rl", "--reduce_legend", is_flag=True)
 @click.option("-h", "--height", type=int, default=200)
 @click.option("-l", "--log")
-@click.option("-rs", "--relative", is_flag=True)
+@click.option("-r", "--relative", is_flag=True)
 @click.option("--debug", is_flag=True, help="Enable debug logging")
 def cli(debug, **kwargs):
     logging.basicConfig(
