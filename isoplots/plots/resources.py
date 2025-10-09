@@ -12,7 +12,7 @@ from isoplots.isonice.utils.wd import Logs
 Logger = logging.getLogger(__name__)
 
 
-def annotate(fig, log, base_y=-0.07, step=-0.02):
+def annotate(fig, log, base_y=-0.07, step=-0.02, relative=False):
     """
     Annotates a figure with specific markers from the ISOFIT log
 
@@ -26,6 +26,8 @@ def annotate(fig, log, base_y=-0.07, step=-0.02):
         Starting Y position relative to the paper dimensions of the figure
     step : float, default=-0.02
         Step amount to take for each new annotation so that the strings don't overlap
+    relative : bool, default=False
+        Uses the relative seconds time instead of the actual timestamps
 
     Returns
     -------
@@ -37,11 +39,13 @@ def annotate(fig, log, base_y=-0.07, step=-0.02):
     logs.read()
 
     for i, (label, line) in enumerate(logs.markers):
-        # Convert the timestamp
-        dt = dtt.strptime(line["timestamp"], '%Y-%m-%d,%H:%M:%S')
-        ts = dt.timestamp() * 1000
+        if relative:
+            ts = line["relative_datetime"]
+        else:
+            # Convert to timestamp
+            ts = line["datetime"].timestamp() * 1000
 
-        Logger.debug(f"Annotation added at {dt}: {label!r}")
+        Logger.debug(f"Annotation added at {ts}: {label!r}")
 
         # Add the vertical line and the annotation separately
         fig.add_vline(x=ts, line_dash="dash", line_width=1)
@@ -108,7 +112,7 @@ def parse(file):
             else:
                 sub.setdefault(k, []).append(v)
 
-        sub.setdefault('timestamp', []).append(time)
+        sub.setdefault('datetime', []).append(time)
 
     with open(file) as f:
         resources = [json.loads(l) for l in f.readlines()]
@@ -121,8 +125,18 @@ def parse(file):
         time = dtt.fromtimestamp(line["timestamp"])
         append(line)
 
+    # Use a base datetime to convert the timedelta back to a datetime
+    base = dtt.fromisocalendar(1, 1, 1)
     for pid, info in data.items():
         info["name"] = info["name"][0]
+
+        t0 = info["datetime"][0]
+        rs = info["relative_seconds"] = []
+        rd = info["relative_datetime"] = []
+        for dt in info["datetime"]:
+            t = dt - t0
+            rs.append(t.total_seconds())
+            rd.append(base + t)
 
     # Make the main process a bit easier to find in the dict
     main = data[resources[2]["pid"]]
@@ -146,6 +160,7 @@ def plot(
     height: int = 200,
     log: str = None,
     sepFigs: bool = False,
+    relative: bool = False,
 ):
     """
     Plots memory and CPU from a resources.jsonl file
@@ -185,6 +200,8 @@ def plot(
     sepFigs : bool, default=False
         Return the list of separate figures instead of the multiplot figure. Useful
         when using this function as a basis to build upon
+    relative : bool, default=False
+        Uses the relative seconds time instead of the actual timestamps
 
     \b
     Returns
@@ -194,6 +211,10 @@ def plot(
     """
     Logger.debug(f"Parsing resources file: {resources}")
     header, data = parse(resources)
+
+    time = "datetime"
+    if relative:
+        time = "relative_datetime"
 
     # Update the ignore list
     ignore = set(ignore or [])
@@ -233,10 +254,10 @@ def plot(
             cpuLegend = memLegend
 
         mem.add_trace(
-            go.Scatter(name=info["name"], x=info["timestamp"], y=info["mem"], showlegend=memLegend, **color)
+            go.Scatter(name=info["name"], x=info[time], y=info["mem"], showlegend=memLegend, **color)
         )
         cpu.add_trace(
-            go.Scatter(name=info["name"], x=info["timestamp"], y=info["cpu"], showlegend=cpuLegend, **color)
+            go.Scatter(name=info["name"], x=info[time], y=info["cpu"], showlegend=cpuLegend, **color)
         )
 
         # Track that this process name was added to the legend, don't add again
@@ -251,17 +272,17 @@ def plot(
         if "all" in memory or "app" in memory:
             Logger.debug("Creating app memory trace")
             traces.append(
-                go.Scatter(name=f"App Memory", x=main["timestamp"], y=main["mem_app"])
+                go.Scatter(name=f"App Memory", x=main[time], y=main["mem_app"])
             )
         if "all" in memory or "used" in memory:
             Logger.debug("Creating used memory trace")
             traces.append(
-                go.Scatter(name=f"Sys Mem Used", x=main["timestamp"], y=main["mem_used"])
+                go.Scatter(name=f"Sys Mem Used", x=main[time], y=main["mem_used"])
             )
         if "all" in memory or "avail" in memory:
             Logger.debug("Creating avail memory trace")
             traces.append(
-                go.Scatter(name=f"Sys Mem Avail", x=main["timestamp"], y=main["mem_avail"])
+                go.Scatter(name=f"Sys Mem Avail", x=main[time], y=main["mem_avail"])
             )
 
         if memory_inline:
@@ -279,13 +300,13 @@ def plot(
         if "all" in cpus or "app" in cpus:
             Logger.debug("Creating app CPU trace")
             traces.append(
-                go.Scatter(name=f"App Average CPU (cores={header['used_cores']})", x=main["timestamp"], y=main["cpu_avg"])
+                go.Scatter(name=f"App Average CPU (cores={header['used_cores']})", x=main[time], y=main["cpu_avg"])
 
             )
         if "all" in cpus or "sys" in cpus:
             Logger.debug("Creating sys CPU trace")
             traces.append(
-                go.Scatter(name=f"System Average CPU (cores={header['total_cores']})", x=main["timestamp"], y=main["sys_cpu"])
+                go.Scatter(name=f"System Average CPU (cores={header['total_cores']})", x=main[time], y=main["sys_cpu"])
             )
 
         if cpus_inline:
@@ -304,9 +325,14 @@ def plot(
     Logger.info(f"Generating a multiplot with {len(figs)} subplots")
     fig = plots.multiplot(figs, sharey=False, dark=False, height=height)
 
+    # if relative:
+    fig.update_xaxes(
+        tickformat = "%H:%M:%S"
+    )
+
     if log:
         Logger.info("Adding log annotations")
-        annotate(fig, log)
+        annotate(fig, log, relative=relative)
 
     if output:
         if output.endswith(".html"):
@@ -317,7 +343,6 @@ def plot(
             fig.write_image(output)
 
     return fig
-
 
 @click.command(name="template", no_args_is_help=True, help=plot.__doc__)
 @click.argument("resources")
@@ -332,6 +357,7 @@ def plot(
 @click.option("-r", "--reduce_legend", is_flag=True)
 @click.option("-h", "--height", type=int, default=200)
 @click.option("-l", "--log")
+@click.option("-rs", "--relative", is_flag=True)
 @click.option("--debug", is_flag=True, help="Enable debug logging")
 def cli(debug, **kwargs):
     logging.basicConfig(

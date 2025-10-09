@@ -10,6 +10,7 @@ import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime as dtt
 from functools import cached_property
 from pathlib import Path
 from types import SimpleNamespace
@@ -649,6 +650,7 @@ class Output(FileFinder):
 class Container:
     """
     Subclasses must contain the attributes:
+
     data : list
         Must be in the form of [(label[str], data[any])]
     dataclass : dict
@@ -663,7 +665,7 @@ class Container:
 
     Additionally, subclasses may define the 'yields' attribute to control which
     variable is yielded during iter:
-        "item"  = Yield the (label, data) pair
+        "item"  = Yield the (label, data) pair [default]
         "label" = Yields the label string only
         "data"  = Yields only the data
     By default, "item" is yielded
@@ -727,6 +729,7 @@ class Container:
 class Marker:
     enabled: bool
     regex: Pattern
+    format: str = None
     lines: List[dict] = field(default_factory=list)
 
 
@@ -766,6 +769,14 @@ class Markers(Container):
                 enabled = True,
                 regex = re.compile(r"Loading LUT into memory"),
             ),
+            "LUT Loaded": Marker(
+                enabled = True,
+                regex = re.compile(r"LUTs fully loaded"),
+            ),
+            "Interpolators Built": Marker(
+                enabled = True,
+                regex = re.compile(r"Interpolators built"),
+            ),
             "Sims Start": Marker(
                 enabled = True,
                 regex = re.compile(r"Executing parallel simulations"),
@@ -776,7 +787,24 @@ class Markers(Container):
             ),
             "Flushing": Marker(
                 enabled = True,
-                regex = re.compile(r"Flushing netCDF to disk"),
+                regex = re.compile(r"Flushing"),
+            ),
+            "Predicting sRTMnet": Marker(
+                enabled = True,
+                regex = re.compile(r"Loading and predicting with emulator"),
+            ),
+            "Resampling Parallel": Marker(
+                enabled = True,
+                regex = re.compile(r"Executing resamples in parallel"),
+            ),
+            "Resampling Finished": Marker(
+                enabled = True,
+                regex = re.compile(r"Resampling finished"),
+            ),
+            "Resampling": Marker(
+                enabled = True,
+                format = "Resampling {name}",
+                regex = re.compile(r"Resampling (?P<name>.*)"),
             ),
         }
 
@@ -788,7 +816,11 @@ class Markers(Container):
         appends it to that marker's match list
         """
         for label, marker in self.dataclass.items():
-            if marker.regex.match(line["message"]):
+            if (match := marker.regex.match(line["message"])):
+                # data = match.groupdict()
+                # if data and marker.format:
+                #     label = marker.format.format(**data)
+
                 marker.lines.append(line)
                 self.data.append((label, line))
 
@@ -911,11 +943,16 @@ class Logs(FileFinder):
         r"(?P<message>.+)"        # Match the rest of the line as the message
     )
 
+    # Base datetime to use for converting the relative timedeltas to a datetime
+    base_dt = dtt.fromisocalendar(1, 1, 1)
+
     def __init__(self, file):
         self.file = file
 
         self.levels = Levels()
         self.markers = Markers()
+
+        self.t0 = None
 
     def _load(self, file):
         """
@@ -940,6 +977,14 @@ class Logs(FileFinder):
         if match := self.logline.match(line):
             parsed = match.groupdict()
             content.append(parsed)
+
+            parsed["datetime"] = dtt.strptime(parsed["timestamp"], '%Y-%m-%d,%H:%M:%S')
+
+            if not self.t0:
+                self.t0 = parsed["datetime"]
+
+            parsed["timedelta"] = parsed["datetime"] - self.t0
+            parsed["relative_datetime"] = self.base_dt + parsed["timedelta"]
 
             self.levels.add(parsed)
             self.markers.check(parsed)
