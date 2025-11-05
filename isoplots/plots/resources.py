@@ -143,7 +143,7 @@ def parse(file):
     data["main"] = main
     main["name"] = "Main Process"
 
-    return header, data
+    return descs, header, data
 
 
 def plot(
@@ -210,7 +210,7 @@ def plot(
         Multiplot figure containing each requested resource figure in a single column
     """
     Logger.debug(f"Parsing resources file: {resources}")
-    header, data = parse(resources)
+    descs, header, data = parse(resources)
 
     time = "datetime"
     if relative:
@@ -254,7 +254,7 @@ def plot(
             cpuLegend = memLegend
 
         mem.add_trace(
-            go.Scatter(name=info["name"], x=info[time], y=info["mem"], showlegend=memLegend, **color)
+            go.Scatter(name=info["name"], x=info[time], y=info["mem_total"], showlegend=memLegend, **color)
         )
         cpu.add_trace(
             go.Scatter(name=info["name"], x=info[time], y=info["cpu"], showlegend=cpuLegend, **color)
@@ -272,7 +272,13 @@ def plot(
         if "all" in memory or "app" in memory:
             Logger.debug("Creating app memory trace")
             traces.append(
-                go.Scatter(name=f"App Memory", x=main[time], y=main["mem_app"])
+                go.Scatter(name=f"App Memory Total", x=main[time], y=main["mem_app_total"])
+            )
+            traces.append(
+                go.Scatter(name=f"App Memory Actual", x=main[time], y=main["mem_app_actual"])
+            )
+            traces.append(
+                go.Scatter(name=f"App Memory Shared (Avg)", x=main[time], y=main["mem_app_shared_avg"])
             )
         if "all" in memory or "used" in memory:
             Logger.debug("Creating used memory trace")
@@ -344,6 +350,7 @@ def plot(
 
     return fig
 
+
 @click.command(name="template", no_args_is_help=True, help=plot.__doc__)
 @click.argument("resources")
 @click.option("-o", "--output")
@@ -354,7 +361,7 @@ def plot(
 @click.option("-i", "--ignore", multiple=True)
 @click.option("-i+", "--ignore_append", multiple=True)
 @click.option("-i-", "--ignore_remove", multiple=True)
-@click.option("-rl", "--reduce_legend", is_flag=True)
+@click.option("-el", "--expand_legend", is_flag=True, help="Inverse of reduce_legend")
 @click.option("-h", "--height", type=int, default=200)
 @click.option("-l", "--log")
 @click.option("-r", "--relative", is_flag=True)
@@ -365,6 +372,7 @@ def cli(debug, **kwargs):
         format = "%(asctime)s | %(levelname)-5s | %(message)s",
     )
 
+    kwargs["reduce_legend"] = not kwargs.pop("expand_legend")
     plot(**kwargs)
 
 
