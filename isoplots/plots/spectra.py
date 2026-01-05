@@ -4,6 +4,7 @@ import click
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
+import plotext
 import xarray as xr
 from matplotlib.patches import Rectangle
 
@@ -118,7 +119,7 @@ def plotSpectra(ax, data, pixel, removeMin=True, hideX=False, annotate=None, nam
         annotate.annotate(name, pixel, color=color, fontsize=16)
 
 
-def plot(file, output=None, title=None, pixels=None, seed=None, terminal=False):
+def plot(file, output=None, title=None, pixels=None, seed=None, terminal=False, term_size=None):
     """\
     Plots the image of an ISOFIT reflectance file along with three interesting spectra
 
@@ -134,10 +135,25 @@ def plot(file, output=None, title=None, pixels=None, seed=None, terminal=False):
     seed : int, default=None
         Random seed to use for finding interesting pixels. None simply uses the
         quantiles (0, .5, 1)
-    pixels : list[tuple[int, int]]
+    pixels : list[tuple[int, int]], default=None
         Pixels (in x, y coords) to plot. Will only accept the first three pixels in the
         list
+    terminal : bool, default=False
+        Enables plotting spectra directly to the terminal. This disables plotting the
+        image as well as saving and will plot each pixel spectra sequentially
+    term_size : list[tuple[int, int]], default=None
+        Limit the size of the images plotted to the terminal. Default allows plotext
+        to assume appropriate sizes. This is the format of number of characters
+        (width, height)
+
+    \b
+    Notes
+    -----
+    For a 15in Macbook full-screen terminal, a good term_size is (210, 25)
     """
+    if terminal:
+        print("Warning: --terminal cannot plot the image and --output will be disabled")
+
     ds = xr.open_dataset(file, engine='rasterio')
     da = ds.band_data
 
@@ -155,34 +171,46 @@ def plot(file, output=None, title=None, pixels=None, seed=None, terminal=False):
     pixels = pixels[:3]
     print(f"Interesting pixels using seed {seed}: {pixels}")
 
-    fig = plt.figure(figsize=(30, 10))
-    grid = gridspec.GridSpec(ncols=2, nrows=len(pixels), wspace=-0.1, hspace=0.2)
+    if terminal:
+        fig = plt.figure()
+        img = None
+        ax = fig.add_subplot(111)
+    else:
+        fig = plt.figure(figsize=(30, 10))
+        grid = gridspec.GridSpec(ncols=2, nrows=len(pixels), wspace=-0.1, hspace=0.2)
 
-    if title:
-        fig.suptitle(title, fontsize=32)
+        if title:
+            fig.suptitle(title, fontsize=32)
 
-    # Plot the RGB data as an image
-    img = fig.add_subplot(grid[:, 0])
-    img.imshow(rgb)
-    img.set_title("RGB of RFL")
+        # Plot the RGB data as an image
+        img = fig.add_subplot(grid[:, 0])
+        img.imshow(rgb)
+        img.set_title("RGB of RFL")
 
     # Now plot three spectras
     for i, pixel in enumerate(pixels):
-        plotSpectra(fig.add_subplot(grid[i, 1]),
+        if terminal:
+            ax.clear()
+        else:
+            ax = grid[i, 1]
+
+        plotSpectra(fig.add_subplot(ax),
             data  = da,
             pixel = pixels[i],
             color = Colors[i],
-            hideX = i+1 < len(pixels),
+            hideX = i+1 < len(pixels) and not terminal,
             annotate = img,
         )
 
-    if output:
+        if terminal:
+            plotext.from_matplotlib(fig)
+            if term_size:
+                plotext.plot_size(*term_size)
+            plotext.show()
+
+    if output and not terminal:
         plt.savefig(output, dpi=200, bbox_inches='tight')
         print(f"Wrote to: {output}")
-
-    if terminal:
-        plotext.from_matplotlib(fig)
-        plotext.show()
 
 
 @click.command(name="spectra", no_args_is_help=True, help=plot.__doc__)
@@ -191,6 +219,8 @@ def plot(file, output=None, title=None, pixels=None, seed=None, terminal=False):
 @click.option("-o", "--output")
 @click.option("-s", "--seed", type=int)
 @click.option("-p", "--pixels", multiple=True, nargs=2, type=int)
+@click.option("--terminal", is_flag=True)
+@click.option("-ts", "--term-size", nargs=2, type=int)
 def cli(**kwargs):
     print("Plotting spectra")
 
