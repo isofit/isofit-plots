@@ -7,7 +7,7 @@ include = ["isoplots"]
 
 [project]
 name = "isoplots"
-version = "0.2.2"
+version = "0.2.3"
 description = "Plot Utilities for ISOFIT"
 readme = "README.rst"
 requires-python = ">=3.9"
@@ -34,7 +34,7 @@ dependencies = [
   "matplotlib",
   "nicegui",
   "plotext",
-  # "rioxarray",
+  "rioxarray",
   # "spectral",
   "plotly",
   "xarray",
