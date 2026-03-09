@@ -1,15 +1,51 @@
 import json
 import logging
 from datetime import datetime as dtt
+from pathlib import Path
 
 import click
 import plotly.graph_objects as go
+from selenium import webdriver
+from Screenshot import Screenshot
+from selenium.webdriver.chrome.options import Options
 
 from isoplots.isonice.utils import plots
 from isoplots.isonice.utils.wd import Logs
 
 
 Logger = logging.getLogger(__name__)
+
+
+def screenshot_html(file, output=None, size=(2000, 2000)):
+    """
+    Screenshots an HTML file to a PNG file.
+
+    Parameters
+    ----------
+    file : str
+        Input HTML file
+    output : str, default=None
+        Output PNG file. Defaults to the input file with a ``.png`` extension
+    size : tuple[int, int], default=(2000, 20000)
+        Screenshot size. Default works well with isoplots resources output. Set to None
+        to enable auto-sizing, though not recommended
+    """
+    file = Path(file).resolve()
+
+    options = Options()
+    options.add_argument('--headless=new')
+    if size:
+        options.add_argument(f"--window-size={size[0]},{size[1]}")
+
+    driver = webdriver.Chrome(options=options)
+    driver.get(f"file://{file}")
+
+    if output is None:
+        output = file.with_suffix(".png")
+
+    ss = Screenshot(driver)
+    ss.capture_full_page(output_path=str(output))
+    driver.quit()
 
 
 def annotate(fig, log, base_y=-0.07, step=-0.02, relative=False):
@@ -114,8 +150,18 @@ def parse(file):
 
         sub.setdefault('datetime', []).append(time)
 
+    resources = []
+    failed = []
     with open(file) as f:
-        resources = [json.loads(l) for l in f.readlines()]
+        for i, line in enumerate(f.readlines()):
+            try:
+                resources.append(json.loads(line))
+            except:
+                failed.append(i)
+
+    if failed:
+        Logger.error(f"{len(failed)} lines failed to parse, likely race conditioned?")
+        Logger.debug(f"Failed lines: {failed}")
 
     descs = resources[0]
     header = resources[1]
@@ -161,6 +207,7 @@ def plot(
     log: str = None,
     sepFigs: bool = False,
     relative: bool = False,
+    png: bool = False,
 ):
     """
     Plots memory and CPU from a resources.jsonl file
@@ -172,7 +219,8 @@ def plot(
         Resources.jsonl file to parse
     output : str, default=None
         Saves the plots to a file. If the extension is .html, the file will retain
-        plotly interactive features
+        plotly interactive features. It is recommended to use the ``png`` parameter
+        to export the HTML, which will produce a cleaner image
     memory : list of {"app", "used", "avail", "all"}, default=["app", "used"]
         Creates a plot of aggregate memory statistics
     memory_inline : bool, default=False
@@ -202,6 +250,8 @@ def plot(
         when using this function as a basis to build upon
     relative : bool, default=False
         Uses the relative seconds time instead of the actual timestamps
+    png : bool, default=False
+        Exports the HTML to a PNG using Selenium to screenshot
 
     \b
     Returns
@@ -209,6 +259,10 @@ def plot(
     go.Figure
         Multiplot figure containing each requested resource figure in a single column
     """
+    if Path(resources).suffix == ".html" and png:
+        Logger.info("Converting existing resources.html to png")
+        return screenshot_html(resources)
+
     Logger.debug(f"Parsing resources file: {resources}")
     descs, header, data = parse(resources)
 
@@ -344,6 +398,9 @@ def plot(
         if output.endswith(".html"):
             Logger.info(f"Writing to HTML: {output}")
             fig.write_html(output)
+
+            if png:
+                screenshot_html(output)
         else:
             Logger.info(f"Writing image: {output}")
             fig.write_image(output)
@@ -351,7 +408,7 @@ def plot(
     return fig
 
 
-@click.command(name="template", no_args_is_help=True, help=plot.__doc__)
+@click.command(name="resources", no_args_is_help=True, help=plot.__doc__)
 @click.argument("resources")
 @click.option("-o", "--output")
 @click.option("-m", "--memory", type=click.Choice(["app", "used", "avail", "all"]), default=("app", "used"), multiple=True)
@@ -365,6 +422,7 @@ def plot(
 @click.option("-h", "--height", type=int, default=200)
 @click.option("-l", "--log")
 @click.option("-r", "--relative", is_flag=True)
+@click.option("--png", is_flag=True)
 @click.option("--debug", is_flag=True, help="Enable debug logging")
 def cli(debug, **kwargs):
     logging.basicConfig(

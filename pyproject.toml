@@ -38,6 +38,7 @@ dependencies = [
   # "spectral",
   "plotly",
   "xarray",
+  "selenium-screenshot>=3.0.0",
 ]
 
 [project.urls]
