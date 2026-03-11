@@ -63,7 +63,7 @@ def findInterestingPixels(data, seed=None):
     return pixels
 
 
-def plotSpectra(ax, data, pixel, removeMin=True, hideX=False, annotate=None, name=None, color=None):
+def plotSpectra(ax, data, pixel, removeMin=True, hideX=False, annotate=None, name=None, color=None, ylim=None):
     """
     Plots the reflectance spectra for a given pixel
 
@@ -71,7 +71,7 @@ def plotSpectra(ax, data, pixel, removeMin=True, hideX=False, annotate=None, nam
     ----------
     ax : matplotlib ax
         Ax to plot on
-    data :
+    data : xarray.DataArray
         ISOFIT reflectance data
     pixel : list[int, int]
         X, Y pixel coordinates
@@ -85,6 +85,8 @@ def plotSpectra(ax, data, pixel, removeMin=True, hideX=False, annotate=None, nam
         Name of the pixel for annotation purposes
     color : str, default=None
         Color to use for annotation
+    ylim : list[tuple[float, float]], default=None
+        Y-axis limits
     """
     sel = dict(zip(['x', 'y'], pixel))
     data = data.isel(sel)
@@ -100,6 +102,9 @@ def plotSpectra(ax, data, pixel, removeMin=True, hideX=False, annotate=None, nam
     ax.set_xlabel("Wavelength")
     ax.grid(axis="x", color="gray", linestyle="--")
 
+    if ylim:
+        ax.set_ylim(*ylim)
+
     ax.set_title(f"Spectra at {pixel}")
     if name:
         ax.set_title(f"Spectra {name} at {pixel}")
@@ -109,17 +114,38 @@ def plotSpectra(ax, data, pixel, removeMin=True, hideX=False, annotate=None, nam
         ax.set_xticklabels([])
 
     if annotate:
-        rect = Rectangle(pixel, 1, 1, linewidth=1, edgecolor=color, facecolor='none')
+        # Boost the size of the box when there's lots of pixels
+        size = 1
+        if data.x.size > 100:
+            size = 5
+
+        # Offset so the box encompasses the whole pixel
+        pixel = [pixel[0]-.5, pixel[1]-.5]
+        rect = Rectangle(pixel, size, size, linewidth=2, edgecolor=color, facecolor='none')
         annotate.add_patch(rect)
 
         pixel = list(pixel)
-        if pixel[1] == 0:
+        if pixel[0] <= 1:
+            pixel[0] += 2
+        pixel[0] -= .5
+
+        if pixel[1] <= 1:
             pixel[1] += 2
-        pixel[1] -= 1
+        pixel[1] -= .5
         annotate.annotate(name, pixel, color=color, fontsize=16)
 
 
-def plot(file, output=None, title=None, pixels=None, seed=None, terminal=False, term_size=None):
+def plot(file,
+    output=None,
+    title=None,
+    pixels=None,
+    ylim=None,
+    brighten=False,
+    bands=(60, 40, 30),
+    seed=None,
+    terminal=False,
+    term_size=None
+):
     """\
     Plots the image of an ISOFIT reflectance file along with three interesting spectra
 
@@ -138,6 +164,13 @@ def plot(file, output=None, title=None, pixels=None, seed=None, terminal=False, 
     pixels : list[tuple[int, int]], default=None
         Pixels (in x, y coords) to plot. Will only accept the first three pixels in the
         list
+    ylim : list[tuple[float, float]], default=None
+        Min/max bounds for the y-axis. If None, lets matplotlib decide which may be
+        inconsistent between multiple plot generations
+    brighten : bool, default=False
+        Brightens the image by limiting scaling between a tighter lower/upper bounds
+    bands : tuple[int, int, int], default=(60, 40, 30)
+        RGB bands to use
     terminal : bool, default=False
         Enables plotting spectra directly to the terminal. This disables plotting the
         image as well as saving and will plot each pixel spectra sequentially
@@ -154,20 +187,24 @@ def plot(file, output=None, title=None, pixels=None, seed=None, terminal=False, 
     if terminal:
         print("Warning: --terminal cannot plot the image and --output will be disabled")
 
-    ds = xr.open_dataset(file, engine='rasterio')
+    ds = xr.open_dataset(file, engine="rasterio")
     da = ds.band_data
 
-    # Retrieve the RGB subset
-    rgb = da.sel(band=[60, 40, 30]).transpose('y', 'x', 'band')
-    rgb /= rgb.max(['x', 'y']) # Brightens image
+    rgb = da.sel(band=list(bands)).transpose("y", "x", "band")
 
-    # Convert to pixel coords for easier plotting
-    rgb['x'] = range(rgb.x.size)
-    rgb['y'] = range(rgb.y.size)
+    lower, upper = 2, 98
+    if brighten:
+        lower, upper = 10, 90
+
+    # Stretch and clip
+    vmin = np.nanpercentile(rgb, lower, axis=(1, 0))
+    vmax = np.nanpercentile(rgb, upper, axis=(1, 0))
+    rgb = (rgb - vmin) / (vmax - vmin)
+    rgb = rgb.clip(0, 1)
 
     # Retrieve the pixels that will be plotted
     if not pixels:
-        pixels = findInterestingPixels(rgb.mean('band'), seed)
+        pixels = findInterestingPixels(rgb.mean("band"), seed)
     pixels = pixels[:3]
     print(f"Interesting pixels using seed {seed}: {pixels}")
 
@@ -199,6 +236,7 @@ def plot(file, output=None, title=None, pixels=None, seed=None, terminal=False, 
             pixel = pixels[i],
             color = Colors[i],
             hideX = i+1 < len(pixels) and not terminal,
+            ylim  = ylim,
             annotate = img,
         )
 
@@ -209,7 +247,7 @@ def plot(file, output=None, title=None, pixels=None, seed=None, terminal=False, 
             plotext.show()
 
     if output and not terminal:
-        plt.savefig(output, dpi=200, bbox_inches='tight')
+        plt.savefig(output, dpi=200, bbox_inches="tight")
         print(f"Wrote to: {output}")
 
 
@@ -219,6 +257,9 @@ def plot(file, output=None, title=None, pixels=None, seed=None, terminal=False, 
 @click.option("-o", "--output")
 @click.option("-s", "--seed", type=int)
 @click.option("-p", "--pixels", multiple=True, nargs=2, type=int)
+@click.option("-y", "--ylim", multiple=True, nargs=2, type=float)
+@click.option("-b", "--brighten", is_flag=True)
+@click.option("--bands", nargs=3, type=int, default=(60, 40, 30))
 @click.option("--terminal", is_flag=True)
 @click.option("-ts", "--term-size", nargs=2, type=int)
 def cli(**kwargs):
