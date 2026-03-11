@@ -1,3 +1,4 @@
+import logging
 import warnings
 
 import click
@@ -16,6 +17,7 @@ Colors = {
     1: (0, 1, 0),
     2: (1, 0, 1)
 }
+Logger = logging.getLogger(__name__)
 
 
 def findInterestingPixels(data, seed=None):
@@ -97,9 +99,14 @@ def plotSpectra(ax, data, pixel, removeMin=True, hideX=False, annotate=None, nam
     if annotate:
         name = name or len(annotate.patches) + 1
 
-    ax.plot(data, color=color)
+    if "wavelength" in data.coords:
+        ax.plot(data.wavelength, data, color=color)
+        ax.set_xlabel("Wavelength")
+    else:
+        ax.plot(data, color=color)
+        ax.set_xlabel("Band")
+
     ax.set_ylabel("Reflectance")
-    ax.set_xlabel("Wavelength")
     ax.grid(axis="x", color="gray", linestyle="--")
 
     if ylim:
@@ -173,7 +180,7 @@ def plot(file,
         RGB bands to use
     terminal : bool, default=False
         Enables plotting spectra directly to the terminal. This disables plotting the
-        image as well as saving and will plot each pixel spectra sequentially
+        RGB image as well as saving and will plot each pixel spectra sequentially
     term_size : list[tuple[int, int]], default=None
         Limit the size of the images plotted to the terminal. Default allows plotext
         to assume appropriate sizes. This is the format of number of characters
@@ -185,10 +192,14 @@ def plot(file,
     For a 15in Macbook full-screen terminal, a good term_size is (210, 25)
     """
     if terminal:
-        print("Warning: --terminal cannot plot the image and --output will be disabled")
+        Logger.warning("--terminal can only plot the spectra and not the RGB image, and --output will be disabled")
 
     ds = xr.open_dataset(file, engine="rasterio")
     da = ds.band_data
+
+    if da.isnull().all():
+        Logger.error("The dataset is fully NaN, please check inputs")
+        return
 
     rgb = da.sel(band=list(bands)).transpose("y", "x", "band")
 
@@ -206,7 +217,7 @@ def plot(file,
     if not pixels:
         pixels = findInterestingPixels(rgb.mean("band"), seed)
     pixels = pixels[:3]
-    print(f"Interesting pixels using seed {seed}: {pixels}")
+    Logger.info(f"Interesting pixels using seed {seed}: {pixels}")
 
     if terminal:
         fig = plt.figure()
@@ -248,7 +259,7 @@ def plot(file,
 
     if output and not terminal:
         plt.savefig(output, dpi=200, bbox_inches="tight")
-        print(f"Wrote to: {output}")
+        Logger.info(f"Wrote to: {output}")
 
 
 @click.command(name="spectra", no_args_is_help=True, help=plot.__doc__)
@@ -263,12 +274,13 @@ def plot(file,
 @click.option("--terminal", is_flag=True)
 @click.option("-ts", "--term-size", nargs=2, type=int)
 def cli(**kwargs):
-    print("Plotting spectra")
+    Logger.info("Plotting spectra")
 
     plot(**kwargs)
 
-    print("Finished")
+    Logger.info("Finished")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
     cli()
