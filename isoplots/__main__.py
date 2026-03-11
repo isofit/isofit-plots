@@ -1,3 +1,4 @@
+import logging
 import os
 from types import SimpleNamespace
 
@@ -29,6 +30,8 @@ class CLI(click.MultiCommand):
         return self._load_modules()
 
     def get_command(self, ctx, name):
+        logging.basicConfig(level=logging.DEBUG)
+
         modules = self._load_modules()
         if name in modules:
             return modules[name].cli
