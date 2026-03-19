@@ -1,13 +1,6 @@
-[build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-include = ["isoplots"]
-
 [project]
 name = "isoplots"
-version = "0.2.6"
+version = "0.2.7"
 description = "Plot Utilities for ISOFIT"
 readme = "README.rst"
 requires-python = ">=3.9"
@@ -49,3 +42,13 @@ isoplots = "isoplots:__main__.cli"
 
 [project.entry-points."xarray.backends"]
 envi = "isoplots.isonice.utils.wd:EnviBackendEntrypoint"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["isoplots/**"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["isoplots"]
