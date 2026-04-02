@@ -1,3 +1,6 @@
+"""
+Single-Pixel Reflectance Fit plot
+"""
 import logging
 from pathlib import Path
 
@@ -6,10 +9,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
+from isoplots.isonice.utils.wd import IsofitWD
+
 
 Logger = logging.getLogger(__name__)
 
-
+#%%
 def plot_rfl(ax, da, fd, sd):
     """
     Plots the ISOFIT output reflectance against the field data
@@ -35,10 +40,14 @@ def plot_rfl(ax, da, fd, sd):
     ax.plot(wl, fd - sd, **opts)
 
     opts["linestyle"] = ":"
-    ax.plot(wl, fd + 2*sd, label="Field Data $\pm 2$ sd", **opts)
-    ax.plot(wl, fd - 2*sd, **opts)
+    ax.plot(wl, (vmax := fd + 2*sd), label="Field Data $\pm 2$ sd", **opts)
+    ax.plot(wl, (vmin := fd - 2*sd), **opts)
 
-    ax.set_ylim(0., 1.1)
+    vmax = max(da.max(), vmax.max())
+    vmin = min(da.min(), vmin.min())
+    buffer = (np.abs(vmax) + np.abs(vmin)) / 10
+
+    ax.set_ylim(vmin-buffer, vmax+buffer)
     ax.set_ylabel("HDRF [-]")
 
     ax.grid(True, linestyle="--", alpha=0.5)
@@ -80,7 +89,6 @@ def plot_residuals(ax, da, fd, sd):
     ax.fill_between(wl, -sd, sd, color="gray", alpha=0.1)
 
     ax.grid(True, linestyle="--", alpha=0.5)
-    ax.set_xlim(375, 2500)
 
 
 def plot(path=None, figsize=(8, 8), output=None):
@@ -92,36 +100,34 @@ def plot(path=None, figsize=(8, 8), output=None):
     Parameters
     ----------
     path : str, default=None
-        Path to the Lake Mary directory which contains the data and output
-        subdirectories. Default None will use the isofit env object to find the example
+        Path to the single pixel output directory which contains the data/ and output/
+        subdirectories
     figsize : tuple[int, int], default=(8, 8)
         Figure size for the matplotlib figure
     output : str, default=None
         Output file to write the plot to, if provided
     """
-    if path is None:
-        from isofit.data import env
-        path = env.path("examples", "LakeMary")
-    else:
-        path = Path(path)
+    path = Path(path).resolve()
 
     assert path.exists(), "LakeMary example not found, please check the --data input"
     Logger.info(f"Using Lake Mary path: {path}")
-
-    Logger.info("Loading field data")
-    wl, fd, sd, n = np.loadtxt(path / "data/field_data.txt", delimiter=",", skiprows=1).T
+    wd = IsofitWD(path)
 
     Logger.info("Loading ISOFIT output reflectance")
-    ds = xr.open_dataset(path / "output/emit20250327T212148_rfl", engine="rasterio")
-    da = ds.band_data.squeeze().load()
+    da = wd.load(find=f"{wd.output.name}_rfl.hdr")
+    da = da.squeeze().load()
+
+    Logger.info("Loading field data")
+    df = wd.load(find="field_data")
+    df = df.head(da.size)
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
 
     Logger.info("Plotting reflectance")
-    plot_rfl(ax1, da, fd, sd)
+    plot_rfl(ax1, da, df["mean"], df["sd"])
 
     Logger.info("Plotting residuals")
-    plot_residuals(ax2, da, fd, sd)
+    plot_residuals(ax2, da, df["mean"], df["sd"])
 
     plt.tight_layout()
 
@@ -130,8 +136,8 @@ def plot(path=None, figsize=(8, 8), output=None):
         Logger.info(f"Wrote to: {output}")
 
 
-@click.command(name="lakemary", no_args_is_help=True, help=plot.__doc__)
-@click.option("-p", "--path")
+@click.command(name="spfit", no_args_is_help=True, help=plot.__doc__)
+@click.option("-p", "--path", required=True)
 @click.option("-fs", "--figsize", type=int, nargs=2)
 @click.option("-o", "--output", required=True)
 def cli(**kwargs):

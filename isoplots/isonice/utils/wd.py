@@ -16,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 from spectral.io import envi as _envi
 from xarray.backends import BackendEntrypoint
@@ -95,6 +96,27 @@ class Loaders:
         if len(ds) == 1:
             return ds[list(ds)[0]]
         return ds
+
+    @classmethod
+    def csv(cls, file, *args, **kwargs):
+        """
+        Loads a CSV file using Pandas
+
+        Parameters
+        ----------
+        file : pathlib.Path
+            Path to file to load
+        *args : list, default=[]
+            Additional arguments to pass to pd.read_csv
+        **kargs : dict, default={}
+            Additional key-word arguments to pass to pd.read_csv
+
+        Returns
+        -------
+        pd.DataFrame
+            Pandas DataFrame of the CSV
+        """
+        return pd.read_csv(file, *args, **kwargs)
 
 
 class EnviBackendEntrypoint(BackendEntrypoint):
@@ -423,7 +445,7 @@ class FileFinder:
         regex = "/".join(regex_parts)
         return self.match(regex, *args, **kwargs)
 
-    def load(self, *, path=None, ifin=None, find=None, match=None):
+    def load(self, *, path=None, ifin=None, find=None, match=None, **kwargs):
         """
         Loads a file based on one of several matching strategies
         Only the first provided method is used
@@ -475,9 +497,9 @@ class FileFinder:
             return self.cache.get(p)
 
         self.log.debug("Returning from load: %s", p)
-        return self._load(p)
+        return self._load(p, **kwargs)
 
-    def _load(self, file):
+    def _load(self, file, **kwargs):
         raise NotImplementedError("Subclass must define this function")
 
 
@@ -505,6 +527,10 @@ class Data(FileFinder):
         r"(surface.mat)": None,
         r"(wavelengths.txt)": None,
     }
+
+    def _load(self, file, **kwargs):
+        if file.suffix == ".csv":
+            return Loaders.csv(file, **kwargs)
 
 
 class LUT(FileFinder):
@@ -605,11 +631,16 @@ class Output(FileFinder):
                 "Could not find the full reflectance product and therefore could not parse the name. This may have downstream effects"
             )
 
-        self.products = [file.replace(f"{self.name}_", "") for file in files]
+        self.products = {file.replace(f"{self.name}_", ""): file for file in files}
 
         for file in files:
             if not (self.path / file).with_suffix(".hdr").exists():
                 raise FileNotFoundError(f"Missing .hdr file for {file}")
+
+    def __getattr__(self, key):
+        if key in self.products:
+            return self.products[key]
+        return super().__getattr__(key)
 
     def rgb(self, r=60, g=40, b=30):
         """
