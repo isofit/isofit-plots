@@ -14,8 +14,8 @@ from isoplots.isonice.utils.wd import IsofitWD
 
 Logger = logging.getLogger(__name__)
 
-#%%
-def plot_rfl(ax, da, fd, sd):
+
+def plot_rfl(ax, da, df, wl=None):
     """
     Plots the ISOFIT output reflectance against the field data
 
@@ -25,23 +25,21 @@ def plot_rfl(ax, da, fd, sd):
         Ax to plot on
     da : xarray.DataArray
         ISOFIT RFL data
-    fd : np.array
-        Field data
-    sd : np.array
-        Standard deviation of field data
+    df : pandas.DataFrame
+        Field Data CSV
+    wl : np.array, default=None
+        Wavelengths for the x axis, defaults to the da wavelengths
     """
-    wl = da.wavelength
-
-    ax.plot(wl, da, color="red", label="ISOFIT", linewidth=1)
-    ax.plot(wl, fd, color="black", label="Field Data", linewidth=1)
+    ax.plot(da.wavelength, da, color="red", label="ISOFIT", linewidth=1)
+    ax.plot(df["wl"], df["mean"], color="black", label="Field Data", linewidth=1)
 
     opts = {"color": "black", "linestyle": "--", "linewidth": 0.5}
-    ax.plot(wl, fd + sd, label="Field Data $\pm 1$ sd", **opts)
-    ax.plot(wl, fd - sd, **opts)
+    ax.plot(df["wl"], df["mean"] + df["sd"], label="Field Data $\pm 1$ sd", **opts)
+    ax.plot(df["wl"], df["mean"] - df["sd"], **opts)
 
     opts["linestyle"] = ":"
-    ax.plot(wl, (vmax := fd + 2*sd), label="Field Data $\pm 2$ sd", **opts)
-    ax.plot(wl, (vmin := fd - 2*sd), **opts)
+    ax.plot(df["wl"], (vmax := df["mean"] + 2*df["sd"]), label="Field Data $\pm 2$ sd", **opts)
+    ax.plot(df["wl"], (vmin := df["mean"] - 2*df["sd"]), **opts)
 
     vmax = max(da.max(), vmax.max())
     vmin = min(da.min(), vmin.min())
@@ -54,7 +52,7 @@ def plot_rfl(ax, da, fd, sd):
     ax.legend(loc="upper right")
 
 
-def plot_residuals(ax, da, fd, sd):
+def plot_residuals(ax, da, df, wl=None):
     """
     Plots residuals between ISOFIT output reflectance and the field data
 
@@ -64,29 +62,30 @@ def plot_residuals(ax, da, fd, sd):
         Ax to plot on
     da : xarray.DataArray
         ISOFIT RFL data
-    fd : np.array
-        Field data
-    sd : np.array
-        Standard deviation of field data
+    df : pandas.DataFrame
+        Field Data CSV
+    wl : np.array, default=None
+        Wavelengths for the x axis, defaults to the da wavelengths
     """
-    wl = da.wavelength
+    if wl is None:
+        wl = da.wavelength
 
-    ax.plot(wl, da - fd, color='red', linewidth=1.2)
+    ax.plot(da.wavelength, da - df["mean"].head(da.size), color='red', linewidth=1.2)
     ax.axhline(0, color='black', linestyle='-', linewidth=0.8)
 
     opts = {"color": "black", "linestyle": "--", "linewidth": 0.7, "alpha": 0.7}
-    ax.plot(wl, sd, **opts)
-    ax.plot(wl, -sd, **opts)
+    ax.plot(df["wl"], df["sd"], **opts)
+    ax.plot(df["wl"], -df["sd"], **opts)
 
     opts["linestyle"] = ":"
-    ax.plot(wl, 2*sd, **opts)
-    ax.plot(wl, -2*sd, **opts)
+    ax.plot(df["wl"], 2*df["sd"], **opts)
+    ax.plot(df["wl"], -2*df["sd"], **opts)
 
     ax.set_ylim(-0.1, 0.1)
     ax.set_xlabel("Wavelength [nm]")
     ax.set_ylabel("Residual")
 
-    ax.fill_between(wl, -sd, sd, color="gray", alpha=0.1)
+    ax.fill_between(df["wl"], -df["sd"], df["sd"], color="gray", alpha=0.1)
 
     ax.grid(True, linestyle="--", alpha=0.5)
 
@@ -119,15 +118,14 @@ def plot(path=None, figsize=(8, 8), output=None):
 
     Logger.info("Loading field data")
     df = wd.load(find="field_data")
-    df = df.head(da.size)
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
 
     Logger.info("Plotting reflectance")
-    plot_rfl(ax1, da, df["mean"], df["sd"])
+    plot_rfl(ax1, da, df, wl=df["wl"])
 
     Logger.info("Plotting residuals")
-    plot_residuals(ax2, da, df["mean"], df["sd"])
+    plot_residuals(ax2, da, df, wl=df["wl"])
 
     plt.tight_layout()
 
