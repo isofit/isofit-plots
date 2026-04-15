@@ -4,3 +4,9 @@ __pycache__
 
 # Dev testing
 local/
+
+# Mac
+.DS_Store
+
+# uv
+uv.lock
