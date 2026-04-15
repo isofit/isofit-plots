@@ -73,6 +73,7 @@ def launch(path=".", config=None, check=False, **kwargs):
 @click.option("-p", "--path", default=".", help="Working directory to initially load with")
 @click.option("-c", "--config", help="Configuration for isonice")
 @click.option("--check", default=False, is_flag=True, help="Check an open port before launching")
+@click.option("--host", type=str, help="Starts the server on this host. Defaults to localhost")
 @click.option("--port", type=int, default=8080, help="Port to use. Defaults to 8080")
 @click.option("-r", "--reload", default=False, is_flag=True, help="Enable hot-reloading")
 def cli(**kwargs):
