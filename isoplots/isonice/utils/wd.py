@@ -21,7 +21,13 @@ import xarray as xr
 from spectral.io import envi as _envi
 from xarray.backends import BackendEntrypoint
 
-from isofit.radiative_transfer import luts
+try:
+    # Isofit v3
+    from isofit.radiative_transfer import luts
+except:
+    # Isofit v4
+    from isofit.luts.reader import Reader
+    luts = Reader()
 
 
 class Loaders:
