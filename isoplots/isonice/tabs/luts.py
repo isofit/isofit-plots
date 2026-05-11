@@ -11,7 +11,14 @@ from nicegui import (
     ui
 )
 
-from isofit.radiative_transfer import luts
+try:
+    # Isofit v3
+    from isofit.radiative_transfer import luts
+except:
+    # Isofit v4
+    from isofit.luts.reader import Reader
+    luts = Reader()
+
 from isoplots.isonice import WD
 from isoplots.isonice.utils import plots
 from isoplots.isonice.utils.enhancedinput import EnhancedInput
