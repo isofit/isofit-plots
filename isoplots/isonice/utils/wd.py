@@ -26,8 +26,7 @@ try:
     from isofit.radiative_transfer import luts
 except:
     # Isofit v4
-    from isofit.luts.reader import Reader
-    luts = Reader()
+    from isofit.luts import reader as luts
 
 
 class Loaders:

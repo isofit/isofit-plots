@@ -6,7 +6,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import plotext
 
-from isofit.radiative_transfer import luts
+try:
+    # Isofit v3
+    from isofit.radiative_transfer import luts
+except:
+    # Isofit v4
+    from isofit.luts import reader as luts
 
 
 DefaultVariables = [
