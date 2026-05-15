@@ -160,7 +160,7 @@ class MultiPlotLUT:
         if file not in self.cache:
             if Path(file).exists():
                 try:
-                    self.cache[file] = luts.load(file, mode="r").unstack()
+                    self.cache[file] = luts.load(file, mode="r", stack=False)
                 except Exception as e:
                     Logger.exception(f"Failed to load via luts.py")
             else:
