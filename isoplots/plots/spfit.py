@@ -11,6 +11,7 @@ import xarray as xr
 
 from isoplots.isonice.utils.wd import IsofitWD
 
+from isofit.core.units import micron_to_nm
 
 Logger = logging.getLogger(__name__)
 
@@ -120,8 +121,9 @@ def plot(path=None, figsize=(8, 8), output=None):
 
     # Ensure field data is in nanometers and matches isofit wl
     if df.wl[0] < 100.0:
-        df.wl *= 1000.0
-
+        df.wl = micron_to_nm(df.wl)
+    if da.wl[0] < 100.0:
+        da.wl = micron_to_nm(da.wl)
     assert len(df.wl) == len(da.wl), "Field data example wavelengths do not match ISOFIT output data"
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
