@@ -11,6 +11,7 @@ import xarray as xr
 
 from isoplots.isonice.utils.wd import IsofitWD
 
+from isofit.core.units import micron_to_nm
 
 Logger = logging.getLogger(__name__)
 
@@ -92,8 +93,7 @@ def plot_residuals(ax, da, df, wl=None):
 
 def plot(path=None, figsize=(8, 8), output=None):
     """
-    Plots the reflectance and residuals of the ISOFIT output on the Lake Mary example
-    against the field data
+    Plots the reflectance and residuals of the ISOFIT output against field data
 
     \b
     Parameters
@@ -108,8 +108,8 @@ def plot(path=None, figsize=(8, 8), output=None):
     """
     path = Path(path).resolve()
 
-    assert path.exists(), "LakeMary example not found, please check the --data input"
-    Logger.info(f"Using Lake Mary path: {path}")
+    assert path.exists(), "Field data example not found, please check the --data input"
+    Logger.info(f"Using path: {path}")
     wd = IsofitWD(path)
 
     Logger.info("Loading ISOFIT output reflectance")
@@ -118,6 +118,13 @@ def plot(path=None, figsize=(8, 8), output=None):
 
     Logger.info("Loading field data")
     df = wd.load(find="field_data")
+
+    # Ensure field data is in nanometers and matches isofit wl
+    if df.wl[0] < 100.0:
+        df.wl = micron_to_nm(df.wl)
+    if da.wl[0] < 100.0:
+        da.wl = micron_to_nm(da.wl)
+    assert len(df.wl) == len(da.wl), "Field data example wavelengths do not match ISOFIT output data"
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
 
@@ -139,7 +146,7 @@ def plot(path=None, figsize=(8, 8), output=None):
 @click.option("-fs", "--figsize", type=int, nargs=2)
 @click.option("-o", "--output", required=True)
 def cli(**kwargs):
-    print("Plotting Lake Mary")
+    print("Plotting Field Data")
 
     plot(**kwargs)
 
