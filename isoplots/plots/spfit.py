@@ -7,11 +7,13 @@ from pathlib import Path
 import click
 import matplotlib.pyplot as plt
 import numpy as np
-import xarray as xr
+import pandas as pd
+from scipy.interpolate import interp1d
 
 from isoplots.isonice.utils.wd import IsofitWD
 
 from isofit.core.units import micron_to_nm
+from isofit.core.common import resample_spectrum, calculate_resample_matrix
 
 Logger = logging.getLogger(__name__)
 
@@ -31,16 +33,16 @@ def plot_rfl(ax, da, df, wl=None):
     wl : np.array, default=None
         Wavelengths for the x axis, defaults to the da wavelengths
     """
-    ax.plot(da.wavelength, da, color="red", label="ISOFIT", linewidth=1)
-    ax.plot(df["wl"], df["mean"], color="black", label="Field Data", linewidth=1)
+    ax.plot(wl, da, color="red", label="ISOFIT", linewidth=1)
+    ax.plot(wl, df["mean"], color="black", label="Field Data", linewidth=1)
 
     opts = {"color": "black", "linestyle": "--", "linewidth": 0.5}
-    ax.plot(df["wl"], df["mean"] + df["sd"], label="Field Data $\pm 1$ sd", **opts)
-    ax.plot(df["wl"], df["mean"] - df["sd"], **opts)
+    ax.plot(wl, df["mean"] + df["sd"], label="Field Data $\pm 1$ sd", **opts)
+    ax.plot(wl, df["mean"] - df["sd"], **opts)
 
     opts["linestyle"] = ":"
-    ax.plot(df["wl"], (vmax := df["mean"] + 2*df["sd"]), label="Field Data $\pm 2$ sd", **opts)
-    ax.plot(df["wl"], (vmin := df["mean"] - 2*df["sd"]), **opts)
+    ax.plot(wl, (vmax := df["mean"] + 2*df["sd"]), label="Field Data $\pm 2$ sd", **opts)
+    ax.plot(wl, (vmin := df["mean"] - 2*df["sd"]), **opts)
 
     vmax = max(da.max(), vmax.max())
     vmin = min(da.min(), vmin.min())
@@ -71,22 +73,22 @@ def plot_residuals(ax, da, df, wl=None):
     if wl is None:
         wl = da.wavelength
 
-    ax.plot(da.wavelength, da - df["mean"].head(da.size), color='red', linewidth=1.2)
+    ax.plot(wl, da - df["mean"].head(da.size), color='red', linewidth=1.2)
     ax.axhline(0, color='black', linestyle='-', linewidth=0.8)
 
     opts = {"color": "black", "linestyle": "--", "linewidth": 0.7, "alpha": 0.7}
-    ax.plot(df["wl"], df["sd"], **opts)
-    ax.plot(df["wl"], -df["sd"], **opts)
+    ax.plot(wl, df["sd"], **opts)
+    ax.plot(wl, -df["sd"], **opts)
 
     opts["linestyle"] = ":"
-    ax.plot(df["wl"], 2*df["sd"], **opts)
-    ax.plot(df["wl"], -2*df["sd"], **opts)
+    ax.plot(wl, 2*df["sd"], **opts)
+    ax.plot(wl, -2*df["sd"], **opts)
 
     ax.set_ylim(-0.1, 0.1)
     ax.set_xlabel("Wavelength [nm]")
     ax.set_ylabel("Residual")
 
-    ax.fill_between(df["wl"], -df["sd"], df["sd"], color="gray", alpha=0.1)
+    ax.fill_between(wl, -df["sd"], df["sd"], color="gray", alpha=0.1)
 
     ax.grid(True, linestyle="--", alpha=0.5)
 
@@ -122,7 +124,31 @@ def plot(path=None, figsize=(8, 8), output=None):
     # Ensure field data is in nanometers and matches isofit wl
     if df.wl[0] < 100.0:
         df.wl = micron_to_nm(df.wl)
-    assert len(df.wl) == len(da.wavelength), "Field data example wavelengths do not match ISOFIT output data"
+    
+    # If field data spacing is different we must resample
+    spacing_differs = np.abs(df.wl[1] - df.wl[0]) != np.abs(da.wl[1] - da.wl[0])
+    length_differs = len(df.wl) != len(da.wl)
+    if spacing_differs or length_differs:
+        Logger.info(f"Field data wavelengths differ from Isofit run, resampling...")
+        df_resampled = pd.DataFrame(data=da["wl"], columns=["wl"])
+        if "fwhm" in da:
+            Logger.info(f"Found fwhm, using this to resample spectrum")
+            H = calculate_resample_matrix(df["wl"], da["wl"], da["fwhm"])
+            df_resampled["mean"] = resample_spectrum(
+                df["mean"], df["wl"], da["wl"], da["fwhm"], H=H
+            )
+            df_resampled["sd"] = resample_spectrum(
+                df["sd"], df["wl"], da["wl"], da["fwhm"], H=H
+            )
+        else:
+            Logger.info(f"Could not find fwhm, using linear interpolation")
+            df_resampled["mean"] = interp1d(df["wl"], df["mean"], kind="linear")(
+                da.wavelength
+            )
+            df_resampled["sd"] = interp1d(df["wl"], df["sd"], kind="linear")(
+                da.wavelength
+            )
+        df = df_resampled
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
 
