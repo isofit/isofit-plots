@@ -126,8 +126,8 @@ def plot(path=None, figsize=(8, 8), output=None):
         df.wl = micron_to_nm(df.wl)
     
     # If field data spacing is different we must resample
-    spacing_differs = np.abs(df.wl[1] - df.wl[0]) != np.abs(da.wl[1] - da.wl[0])
-    length_differs = len(df.wl) != len(da.wl)
+    spacing_differs = np.abs(df.wl[1] - df.wl[0]) != np.abs(da.wavelength[1] - da.wavelength[0])
+    length_differs = len(df.wl) != len(da.wavelength)
     if spacing_differs or length_differs:
         Logger.info(f"Field data wavelengths differ from Isofit run, resampling...")
         df_resampled = pd.DataFrame(data=da["wl"], columns=["wl"])
