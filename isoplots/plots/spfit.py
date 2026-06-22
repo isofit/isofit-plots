@@ -130,15 +130,20 @@ def plot(path=None, figsize=(8, 8), output=None):
     length_differs = len(df.wl) != len(da.wavelength)
     if spacing_differs or length_differs:
         Logger.info(f"Field data wavelengths differ from Isofit run, resampling...")
-        df_resampled = pd.DataFrame(data=da["wl"], columns=["wl"])
-        if "fwhm" in da:
+        df_resampled = pd.DataFrame(data=da["wavelength"], columns=["wl"])
+        if "fwhm" in da.coords:
+            
             Logger.info(f"Found fwhm, using this to resample spectrum")
-            H = calculate_resample_matrix(df["wl"], da["wl"], da["fwhm"])
+            wl_field = df["wl"].values
+            wl_isofit = da["wavelength"].values
+            fwhm_isofit = da["fwhm"].values
+
+            H = calculate_resample_matrix(wl_field, wl_isofit, fwhm_isofit)
             df_resampled["mean"] = resample_spectrum(
-                df["mean"], df["wl"], da["wl"], da["fwhm"], H=H
+                df["mean"], wl_field, wl_isofit, fwhm_isofit, H=H
             )
             df_resampled["sd"] = resample_spectrum(
-                df["sd"], df["wl"], da["wl"], da["fwhm"], H=H
+                df["sd"], wl_field, wl_isofit, fwhm_isofit, H=H
             )
         else:
             Logger.info(f"Could not find fwhm, using linear interpolation")
