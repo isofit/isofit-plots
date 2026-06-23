@@ -140,10 +140,10 @@ def plot(path=None, figsize=(8, 8), output=None):
 
             H = calculate_resample_matrix(wl_field, wl_isofit, fwhm_isofit)
             df_resampled["mean"] = resample_spectrum(
-                df["mean"], wl_field, wl_isofit, fwhm_isofit, H=H
+                df["mean"].values, wl_field, wl_isofit, fwhm_isofit, H=H
             )
             df_resampled["sd"] = resample_spectrum(
-                df["sd"], wl_field, wl_isofit, fwhm_isofit, H=H
+                df["sd"].values, wl_field, wl_isofit, fwhm_isofit, H=H
             )
         else:
             Logger.info(f"Could not find fwhm, using linear interpolation")
