@@ -34,6 +34,13 @@ dependencies = [
   "selenium-screenshot>=3.0.0",
 ]
 
+[project.optional-dependencies]
+term = [
+  "PlotextPlot",
+  "rioxarray",
+  "textual",
+]
+
 [project.urls]
 repository = "http://github.com/isofit/isofit-plots"
 

@@ -1,0 +1,58 @@
+
+
+/* #LogController {
+    layout: grid;
+    grid-size: 3;
+    grid-columns: auto;
+    grid-rows: auto;
+    border: greenyellow
+} */
+
+/* Screen {
+  layout: grid;
+  grid-size: 1;
+  grid-rows: 1fr;
+} */
+
+SelectionList {
+    padding: 1;
+    border: solid $accent;
+}
+
+#collapse {
+  height: auto;
+  layout: grid;
+  grid-size: 2;
+  grid-gutter: 1;
+  grid-columns: auto;
+  /* grid-rows: auto; */
+}
+
+#Spectra {
+  layout: grid;
+  grid-size: 1;
+  grid-rows: 1fr;
+}
+
+#Image {
+  layout: grid;
+  /* grid-size: 2; */
+  /* grid-columns: 50%;
+  grid-rows: 50%; */
+  /* width: 50%; */
+}
+
+#DockedImage {
+  layout: grid;
+  dock: left;
+  /* grid-columns: 50%; */
+  /* width: 36%; */
+}
+
+/* .spectraPlot {
+    height: 100%;
+} */
+
+/* #logs {
+    column-span: 2;
+} */
